@@ -94,6 +94,8 @@ async def main() -> None:
     from bot.tasks.kill_leaderboards import post_kill_leaderboards
     from bot.tasks.wanted_watcher import check_wanted
     from bot.tasks.teleporter import process_teleports
+    from bot.tasks.server_settings_watcher import watch_server_settings
+    from bot.tasks.firewall import apply_blocklist
 
     # ── APScheduler ───────────────────────────────────────────────────────────
     scheduler = AsyncIOScheduler(timezone="UTC")
@@ -103,6 +105,14 @@ async def main() -> None:
         process_orders, "interval", seconds=5,
         args=[pool, servers_map], id="orders", misfire_grace_time=10,
     )
+
+    # Firewall blocklist sync (global, runs only if enabled)
+    if settings.firewall_enabled:
+        scheduler.add_job(
+            apply_blocklist, "interval", minutes=1,
+            id="firewall", misfire_grace_time=30,
+        )
+        logger.info("Firewall blocklist management enabled ({})", settings.firewall_blocklist_file)
 
     # Per-server tasks
     for srv in servers:
@@ -161,6 +171,10 @@ async def main() -> None:
         scheduler.add_job(
             check_wanted, "interval", minutes=30,
             args=[pool, srv, bot], id=f"wanted_{sn}", misfire_grace_time=120,
+        )
+        scheduler.add_job(
+            watch_server_settings, "interval", minutes=5,
+            args=[pool, srv, bot], id=f"settingswatcher_{sn}", misfire_grace_time=60,
         )
 
     logger.info("Scheduler has {} jobs total", len(scheduler.get_jobs()))

@@ -309,6 +309,38 @@ class AdminCog(commands.Cog, name="Admin"):
         )
         logger.info("Admin {} set bounty {} on {}", interaction.user, amount, player_name)
 
+    # ── /addblock ─────────────────────────────────────────────────────────────
+    @app_commands.command(name="addblock", description="[ADMIN] Block an IP address via the server firewall.")
+    @app_commands.describe(ip_address="IP address or CIDR range to block (e.g. 1.2.3.4 or 1.2.3.0/24)")
+    @_admin_check()
+    async def add_block(self, interaction: discord.Interaction, ip_address: str) -> None:
+        await interaction.response.defer(ephemeral=True)
+        from bot.tasks.firewall import block_ip
+        try:
+            await block_ip(ip_address)
+            await interaction.followup.send(
+                f"Firewall rule added: **{ip_address}** is now blocked.", ephemeral=True
+            )
+            logger.info("Admin {} blocked IP {}", interaction.user, ip_address)
+        except Exception as exc:
+            await interaction.followup.send(f"Failed to block `{ip_address}`: {exc}", ephemeral=True)
+
+    # ── /removeblock ──────────────────────────────────────────────────────────
+    @app_commands.command(name="removeblock", description="[ADMIN] Remove an IP address from the firewall blocklist.")
+    @app_commands.describe(ip_address="IP address or CIDR range to unblock")
+    @_admin_check()
+    async def remove_block(self, interaction: discord.Interaction, ip_address: str) -> None:
+        await interaction.response.defer(ephemeral=True)
+        from bot.tasks.firewall import unblock_ip
+        try:
+            await unblock_ip(ip_address)
+            await interaction.followup.send(
+                f"Firewall rule removed: **{ip_address}** is now unblocked.", ephemeral=True
+            )
+            logger.info("Admin {} unblocked IP {}", interaction.user, ip_address)
+        except Exception as exc:
+            await interaction.followup.send(f"Failed to unblock `{ip_address}`: {exc}", ephemeral=True)
+
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(AdminCog(bot))
