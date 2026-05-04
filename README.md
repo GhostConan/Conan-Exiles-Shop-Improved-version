@@ -15,6 +15,10 @@ Built on **discord.py 2.x**, **APScheduler**, **aiomysql**, and **aiosqlite**.
 | **Player Sync** | Online player list synced from RCON every 5 minutes |
 | **Registration** | Players link Discord ↔ Conan account with a one-time code |
 | **🧊 Black Ice Converter** | Every 2 min: converts dropped Black Ice → Hardened Bricks (10:1) |
+| **Server Buffs** | Timed server-wide buffs purchasable from the shop |
+| **Vault Rentals** | Players rent vaults via Discord for a per-day coin fee |
+| **Kill Log** | Kill events streamed live to a dedicated Discord channel |
+| **Building Leaderboard** | Clan building piece & inventory counts posted every 10 min |
 | **Building Tracker** | Clan building piece counts updated every minute |
 | **Jail System** | Admin can sentence, teleport, and auto-release players |
 | **Admin Commands** | Give currency/items, teleport, jail, broadcast — all slash commands |
@@ -219,6 +223,10 @@ All settings live in `.env`. Here are the most important ones:
 | `/balance` | Check your current coin balance |
 | `/shop [category]` | Browse available items (optionally filtered by category) |
 | `/buy <item_name> [quantity]` | Purchase an item — delivered in-game automatically |
+| `/listvaults` | See available vaults and their rental prices |
+| `/rentvault <name> <days>` | Rent a vault for 1–30 days (costs coins per day) |
+| `/myvaults` | See your active vault rentals and expiry times |
+| `/releasevault <name>` | Release a vault early (no refund) |
 
 ### Admin Commands *(requires Admin or Moderator role)*
 

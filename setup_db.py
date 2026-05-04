@@ -123,6 +123,7 @@ TABLES: list[str] = [
         buffName          VARCHAR(200),
         buffDescription   TEXT,
         buffPrice         INT          NOT NULL DEFAULT 0,
+        duration_minutes  INT          NOT NULL DEFAULT 60,
         isactive          TINYINT(1)   NOT NULL DEFAULT 0,
         activateCommand   TEXT,
         deactivateCommand TEXT,

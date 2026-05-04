@@ -39,6 +39,7 @@ COGS = [
     "bot.cogs.shop",
     "bot.cogs.admin",
     "bot.cogs.registration",
+    "bot.cogs.vault",
 ]
 
 
@@ -60,20 +61,29 @@ async def main() -> None:
     from bot.tasks.black_ice_converter import convert_black_ice
     from bot.tasks.game_db_watcher import watch_game_db
     from bot.tasks.game_log_watcher import game_log_watcher
+    from bot.tasks.serverbuff_watcher import check_server_buffs
+    from bot.tasks.vault_watcher import check_vault_expiry
+    from bot.tasks.mapmaker import post_leaderboards
 
     # ── APScheduler ───────────────────────────────────────────────────────────
     scheduler = AsyncIOScheduler(timezone="UTC")
-    scheduler.add_job(pay_users,         "interval", minutes=settings.paycheck_interval_minutes,          args=[pool], id="payroll",  misfire_grace_time=60)
-    scheduler.add_job(sync_players,      "interval", minutes=5,                                           args=[pool], id="usersync", misfire_grace_time=60)
-    scheduler.add_job(process_orders,    "interval", seconds=5,                                           args=[pool], id="orders",   misfire_grace_time=10)
-    scheduler.add_job(convert_black_ice, "interval", seconds=settings.black_ice_check_interval_seconds,  args=[pool], id="blackice", misfire_grace_time=60)
-    scheduler.add_job(watch_game_db,     "interval", minutes=1,                                          args=[pool], id="gamedb",   misfire_grace_time=60)
+    scheduler.add_job(pay_users,         "interval", minutes=settings.paycheck_interval_minutes,          args=[pool],       id="payroll",  misfire_grace_time=60)
+    scheduler.add_job(sync_players,      "interval", minutes=5,                                           args=[pool],       id="usersync", misfire_grace_time=60)
+    scheduler.add_job(process_orders,    "interval", seconds=5,                                           args=[pool],       id="orders",   misfire_grace_time=10)
+    scheduler.add_job(convert_black_ice, "interval", seconds=settings.black_ice_check_interval_seconds,  args=[pool],       id="blackice", misfire_grace_time=60)
+    scheduler.add_job(watch_game_db,     "interval", minutes=1,                                          args=[pool],       id="gamedb",   misfire_grace_time=60)
     scheduler.start()
     logger.info("Scheduler started ({} jobs)", len(scheduler.get_jobs()))
 
     # ── Discord bot ───────────────────────────────────────────────────────────
     bot = _build_bot()
     bot.db_pool = pool  # expose pool to cogs via bot attribute
+
+    # Jobs that need the bot object (for Discord channel access) are added after bot is created
+    scheduler.add_job(check_server_buffs, "interval", minutes=1,  args=[pool, bot], id="buffwatch",  misfire_grace_time=60)
+    scheduler.add_job(check_vault_expiry, "interval", minutes=5,  args=[pool, bot], id="vaultwatch", misfire_grace_time=60)
+    scheduler.add_job(post_leaderboards,  "interval", minutes=10, args=[pool, bot], id="leaderboard",misfire_grace_time=60)
+    logger.info("Scheduler has {} jobs total", len(scheduler.get_jobs()))
 
     @bot.event
     async def on_ready() -> None:
@@ -86,7 +96,7 @@ async def main() -> None:
         logger.info("Loaded cog: {}", cog)
 
     # Game log watcher runs as a persistent background coroutine
-    asyncio.get_event_loop().create_task(game_log_watcher(pool))
+    asyncio.get_event_loop().create_task(game_log_watcher(pool, bot))
 
     async with bot:
         await bot.start(settings.discord_token)

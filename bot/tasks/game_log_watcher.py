@@ -8,17 +8,12 @@ Events handled
 ──────────────
   • !register <code>  chat message  → links Discord account to character
   • Black Ice drop events           → records pending conversion
+  • Kill events                     → streams to kill log Discord channel
 
-Adjusting the Black Ice drop regex
-────────────────────────────────────
-The Conan Exiles server log format for item drop events varies across
-server versions and mods.  The default pattern matches lines like:
-
-    CharacterName dropped Black Ice amount:5
-    CharacterName dropped BlackIce x5
-
-If your log uses a different format, update RE_BLACK_ICE_DROP below.
-Run the bot with DEBUG logging to see every parsed line.
+Adjusting regexes
+─────────────────
+Conan Exiles log formats vary across versions and mods.
+Run the bot with DEBUG logging to see every parsed line and tune as needed.
 """
 from __future__ import annotations
 
@@ -30,6 +25,8 @@ from pathlib import Path
 import aiofiles
 import aiosqlite
 import aiomysql
+import discord
+from discord.ext import commands
 from loguru import logger
 
 from bot.config import settings
@@ -49,6 +46,15 @@ RE_BLACK_ICE_DROP = re.compile(
     re.IGNORECASE,
 )
 
+# Matches kill events — common Conan Exiles formats:
+#   'Victim' was killed by 'Killer'
+#   LogCombat: Killer killed Victim
+# Adjust if your server log uses a different format.
+RE_KILL = re.compile(
+    r"'(?P<victim>[^']+)'\s+was\s+killed\s+by\s+'?(?P<killer>[^'\[]+?)'?\s*(?:\[|$)",
+    re.IGNORECASE,
+)
+
 # Matches in-game registration command:  !register ABCD1234
 RE_REGISTER_CMD = re.compile(r"^!register\s+([A-Z0-9]{6,12})$", re.IGNORECASE)
 
@@ -60,7 +66,7 @@ def _parse_log_time(raw: str) -> datetime:
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
-async def game_log_watcher(pool: aiomysql.Pool) -> None:
+async def game_log_watcher(pool: aiomysql.Pool, bot: commands.Bot) -> None:
     """Tail the Conan server log indefinitely, restarting on errors."""
     log_path = Path(settings.game_log_path)
     logger.info("Log watcher started: {}", log_path)
@@ -88,7 +94,7 @@ async def game_log_watcher(pool: aiomysql.Pool) -> None:
                         await asyncio.sleep(0.1)
                         continue
 
-                    await _process_line(line.strip(), pool)
+                    await _process_line(line.strip(), pool, bot)
 
         except asyncio.CancelledError:
             logger.info("Log watcher cancelled.")
@@ -100,7 +106,7 @@ async def game_log_watcher(pool: aiomysql.Pool) -> None:
 
 # ── Line dispatcher ───────────────────────────────────────────────────────────
 
-async def _process_line(line: str, pool: aiomysql.Pool) -> None:
+async def _process_line(line: str, pool: aiomysql.Pool, bot: commands.Bot) -> None:
     if not line:
         return
 
@@ -110,6 +116,12 @@ async def _process_line(line: str, pool: aiomysql.Pool) -> None:
         char_name = m.group("char").strip()
         amount = int(m.group("amount"))
         await _handle_black_ice_drop(pool, char_name, amount)
+        return
+
+    # Kill event
+    m = RE_KILL.search(line)
+    if m:
+        await _handle_kill(bot, m.group("killer").strip(), m.group("victim").strip())
         return
 
     # Chat messages (registration etc.)
@@ -122,6 +134,29 @@ async def _process_line(line: str, pool: aiomysql.Pool) -> None:
 
 
 # ── Handlers ──────────────────────────────────────────────────────────────────
+
+async def _handle_kill(bot: commands.Bot, killer: str, victim: str) -> None:
+    """Post kill event to the kill log Discord channel."""
+    logger.debug("Kill event: '{}' killed '{}'", killer, victim)
+
+    if not settings.killlog_channel_id:
+        return
+
+    chan = bot.get_channel(settings.killlog_channel_id)
+    if not chan:
+        return
+
+    try:
+        embed = discord.Embed(
+            title="⚔️ Kill",
+            colour=discord.Colour.dark_red(),
+            description=f"**{killer}** killed **{victim}**",
+        )
+        embed.timestamp = datetime.utcnow()
+        await chan.send(embed=embed)
+    except Exception as exc:
+        logger.warning("Could not post kill log to Discord: {}", exc)
+
 
 async def _handle_black_ice_drop(pool: aiomysql.Pool, char_name: str, amount: int) -> None:
     """Resolve char_name → platform_id and record the drop for conversion."""
