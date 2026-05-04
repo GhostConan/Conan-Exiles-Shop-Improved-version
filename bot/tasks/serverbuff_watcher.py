@@ -19,11 +19,11 @@ from discord.ext import commands
 from loguru import logger
 
 from bot import rcon as rcon_client
-from bot.config import settings
+from bot.config import settings, ServerContext
 
 
-async def check_server_buffs(pool: aiomysql.Pool, bot: commands.Bot) -> None:
-    logger.debug("Server buff watcher running...")
+async def check_server_buffs(pool: aiomysql.Pool, srv: ServerContext, bot: commands.Bot) -> None:
+    logger.debug("Server buff watcher running [{}]...", srv.server_name)
     try:
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
@@ -44,7 +44,7 @@ async def check_server_buffs(pool: aiomysql.Pool, bot: commands.Bot) -> None:
                     # Run deactivate RCON command if present
                     if deactivate_cmd:
                         try:
-                            await rcon_client.execute(deactivate_cmd)
+                            await rcon_client.execute_for(srv, deactivate_cmd)
                         except Exception as exc:
                             logger.warning("Failed to deactivate buff '{}': {}", buff_name, exc)
 
@@ -56,7 +56,7 @@ async def check_server_buffs(pool: aiomysql.Pool, bot: commands.Bot) -> None:
 
                     # Broadcast in-game
                     try:
-                        await rcon_client.broadcast(f"Server buff '{buff_name}' has expired.")
+                        await rcon_client.broadcast_for(srv, f"Server buff '{buff_name}' has expired.")
                     except Exception:
                         pass
 

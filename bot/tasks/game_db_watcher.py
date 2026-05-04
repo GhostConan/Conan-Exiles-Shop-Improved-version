@@ -1,14 +1,13 @@
 """
 bot/tasks/game_db_watcher.py
 ─────────────────────────────
-Scheduled task: read the Conan Exiles SQLite game.db and sync stats.
-Runs every 1 minute.
+Scheduled task: read game.db and sync stats. Runs every 1 minute.
 
-Actions performed each cycle
-─────────────────────────────
-  1. Building piece count per clan → {sn}_building_piece_tracking
-  2. Container item count per clan → {sn}_inventory_tracking
-  3. Release prisoners whose sentence has expired (if PRISON_ENABLED=True)
+Actions per cycle:
+  1. Building piece count per clan  → {sn}_building_piece_tracking
+  2. Container item count per clan  → {sn}_inventory_tracking
+  3. Release prisoners whose sentence has expired   (Discord notice)
+  4. Detect and return escaped prisoners to cells   (Discord notice)
 """
 from __future__ import annotations
 
@@ -16,22 +15,24 @@ from datetime import datetime
 
 import aiosqlite
 import aiomysql
+import discord
+from discord.ext import commands
 from loguru import logger
 
-from bot.config import settings
+from bot.config import settings, ServerContext
 from bot import rcon as rcon_client
 
 
-async def watch_game_db(pool: aiomysql.Pool) -> None:
-    logger.debug("Game DB watcher running...")
+async def watch_game_db(pool: aiomysql.Pool, srv: ServerContext, bot: commands.Bot) -> None:
+    logger.debug("Game DB watcher running [{}]...", srv.server_name)
     try:
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
                 await cur.execute("SET NAMES utf8mb4")
-                sn = settings.server_name
+                sn = srv.server_name
 
                 async with aiosqlite.connect(
-                    f"file:{settings.game_db_path}?mode=ro", uri=True
+                    f"file:{srv.game_db_path}?mode=ro", uri=True
                 ) as game_db:
                     game_db.row_factory = aiosqlite.Row
 
@@ -82,17 +83,20 @@ async def watch_game_db(pool: aiomysql.Pool) -> None:
 
                 await conn.commit()
 
-                # ── 3. Jail release check ─────────────────────────────────────
-                if settings.prison_enabled:
-                    await _check_jail_releases(cur, conn, sn)
+                # ── 3 & 4. Jail management ─────────────────────────────────────
+                if srv.prison_enabled:
+                    await _check_jail(cur, conn, sn, srv, bot)
 
     except Exception as exc:
-        logger.error("Game DB watcher error: {}", exc, exc_info=True)
+        logger.error("Game DB watcher error [{}]: {}", srv.server_name, exc, exc_info=True)
 
 
-async def _check_jail_releases(cur, conn, sn: str) -> None:
+async def _check_jail(
+    cur, conn, sn: str, srv: ServerContext, bot: commands.Bot
+) -> None:
     await cur.execute(
-        f"SELECT cellName, prisoner, sentenceTime, sentenceLength, assignedPlayerPlatformID "
+        f"SELECT cellName, prisoner, sentenceTime, sentenceLength, "
+        f"assignedPlayerPlatformID, spawnLocation "
         f"FROM {sn}_jail_info WHERE prisoner IS NOT NULL"
     )
     rows = await cur.fetchall()
@@ -100,30 +104,94 @@ async def _check_jail_releases(cur, conn, sn: str) -> None:
         return
 
     now_ts = datetime.now().timestamp()
-    exit_coords = settings.prison_exit_coords
+    jail_chan = (
+        bot.get_channel(settings.jail_channel_id) if settings.jail_channel_id else None
+    )
 
-    for cell, prisoner, sentence_time, sentence_len, platform_id in rows:
+    for cell, prisoner, sentence_time, sentence_len, platform_id, spawn_location in rows:
         if sentence_time is None:
             continue
 
-        end_ts = sentence_time.timestamp() + sentence_len * 60
-        if now_ts < end_ts:
-            continue
+        end_ts = sentence_time.timestamp() + (sentence_len or 0) * 60
 
-        logger.info("Releasing prisoner {} from cell {}", prisoner, cell)
+        if now_ts >= end_ts:
+            # ── Release prisoner ──────────────────────────────────────────────
+            logger.info("Releasing prisoner {} from cell {} [{}]", prisoner, cell, sn)
 
-        # Queue a teleport request to the prison exit
-        await cur.execute(
-            f"INSERT INTO {sn}_teleport_requests (player, dstlocation, platformid) "
-            "VALUES (%s, %s, %s)",
-            (prisoner, exit_coords, platform_id),
-        )
-        await cur.execute(
-            f"UPDATE {sn}_jail_info "
-            "SET prisoner = NULL, assignedPlayerPlatformID = NULL, "
-            "sentenceTime = NULL, sentenceLength = NULL "
-            "WHERE cellName = %s",
-            (cell,),
-        )
+            await cur.execute(
+                f"INSERT INTO {sn}_teleport_requests (player, dstlocation, platformid) "
+                "VALUES (%s, %s, %s)",
+                (prisoner, srv.prison_exit_coords, platform_id),
+            )
+            await cur.execute(
+                f"UPDATE {sn}_jail_info "
+                "SET prisoner = NULL, assignedPlayerPlatformID = NULL, "
+                "sentenceTime = NULL, sentenceLength = NULL "
+                "WHERE cellName = %s",
+                (cell,),
+            )
+            await conn.commit()
 
-    await conn.commit()
+            if jail_chan:
+                try:
+                    embed = discord.Embed(
+                        title="Prisoner Released",
+                        description=(
+                            f"**{prisoner}** has been released from cell **{cell}**."
+                        ),
+                        colour=discord.Colour.green(),
+                    )
+                    embed.set_footer(text="Sentence completed")
+                    embed.timestamp = datetime.utcnow()
+                    await jail_chan.send(embed=embed)
+                except Exception as exc:
+                    logger.warning("Could not post release notice: {}", exc)
+
+        elif srv.prison_min_x != srv.prison_max_x:
+            # ── Escape detection ──────────────────────────────────────────────
+            await cur.execute(
+                f"SELECT X, Y, conid FROM {sn}_currentusers "
+                "WHERE platformid = %s LIMIT 1",
+                (platform_id,),
+            )
+            pos_row = await cur.fetchone()
+            if not pos_row:
+                continue
+
+            px, py, conid = pos_row
+            outside = (
+                px < srv.prison_min_x or px > srv.prison_max_x
+                or py < srv.prison_min_y or py > srv.prison_max_y
+            )
+
+            if outside and spawn_location and conid:
+                logger.warning(
+                    "Prisoner {} escaped from {} [{}]! Returning to cell.",
+                    prisoner, cell, sn,
+                )
+                try:
+                    parts = spawn_location.split()
+                    if len(parts) >= 3:
+                        x, y, z = int(parts[0]), int(parts[1]), int(parts[2])
+                        await rcon_client.execute_for(
+                            srv, f"con {conid} TeleportPlayer {x} {y} {z}"
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "Could not return escaped prisoner {}: {}", prisoner, exc
+                    )
+
+                if jail_chan:
+                    try:
+                        embed = discord.Embed(
+                            title="Escape Attempt",
+                            description=(
+                                f"**{prisoner}** tried to escape from **{cell}** "
+                                "and was returned."
+                            ),
+                            colour=discord.Colour.red(),
+                        )
+                        embed.timestamp = datetime.utcnow()
+                        await jail_chan.send(embed=embed)
+                    except Exception as exc:
+                        logger.warning("Could not post escape notice: {}", exc)

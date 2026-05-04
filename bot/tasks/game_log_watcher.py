@@ -29,33 +29,20 @@ import discord
 from discord.ext import commands
 from loguru import logger
 
-from bot.config import settings
+from bot.config import settings, ServerContext
 
 # ── Regex patterns ────────────────────────────────────────────────────────────
 
-# Matches log timestamp:  [2024.01.01-12.00.00:000]
 RE_TIMESTAMP = re.compile(r"\[(\d{4}\.\d{2}\.\d{2}-\d{2}\.\d{2}\.\d{2}:\d+)\]")
-
-# Matches in-game chat:  Character 'Name' said: MESSAGE
 RE_CHAT = re.compile(r"Character '([^']+)' said:\s*(.+)")
-
-# Matches Black Ice drop events (adjust if your log format differs)
-# Covers: "Name dropped Black Ice amount:5"  and  "Name dropped BlackIce x5"
 RE_BLACK_ICE_DROP = re.compile(
     r"(?P<char>.+?)\s+dropped\s+Black\s*Ice\s+(?:amount:|x)(?P<amount>\d+)",
     re.IGNORECASE,
 )
-
-# Matches kill events — common Conan Exiles formats:
-#   'Victim' was killed by 'Killer'
-#   LogCombat: Killer killed Victim
-# Adjust if your server log uses a different format.
 RE_KILL = re.compile(
     r"'(?P<victim>[^']+)'\s+was\s+killed\s+by\s+'?(?P<killer>[^'\[]+?)'?\s*(?:\[|$)",
     re.IGNORECASE,
 )
-
-# Matches in-game registration command:  !register ABCD1234
 RE_REGISTER_CMD = re.compile(r"^!register\s+([A-Z0-9]{6,12})$", re.IGNORECASE)
 
 
@@ -66,10 +53,10 @@ def _parse_log_time(raw: str) -> datetime:
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
-async def game_log_watcher(pool: aiomysql.Pool, bot: commands.Bot) -> None:
+async def game_log_watcher(pool: aiomysql.Pool, bot: commands.Bot, srv: ServerContext) -> None:
     """Tail the Conan server log indefinitely, restarting on errors."""
-    log_path = Path(settings.game_log_path)
-    logger.info("Log watcher started: {}", log_path)
+    log_path = Path(srv.game_log_path)
+    logger.info("Log watcher started [{}]: {}", srv.server_name, log_path)
 
     while True:
         try:
@@ -81,67 +68,65 @@ async def game_log_watcher(pool: aiomysql.Pool, bot: commands.Bot) -> None:
             prev_size = log_path.stat().st_size
 
             async with aiofiles.open(log_path, "r", encoding="utf-8", errors="ignore") as f:
-                await f.seek(0, 2)  # jump to the end of the file
+                await f.seek(0, 2)
                 while True:
                     line = await f.readline()
                     if not line:
-                        # Detect log rotation (new file is smaller than before)
                         cur_size = log_path.stat().st_size
                         if cur_size < prev_size:
-                            logger.info("Log file rotated — reopening.")
+                            logger.info("Log file rotated — reopening [{}].", srv.server_name)
                             break
                         prev_size = cur_size
                         await asyncio.sleep(0.1)
                         continue
 
-                    await _process_line(line.strip(), pool, bot)
+                    await _process_line(line.strip(), pool, bot, srv)
 
         except asyncio.CancelledError:
-            logger.info("Log watcher cancelled.")
+            logger.info("Log watcher cancelled [{}].", srv.server_name)
             return
         except Exception as exc:
-            logger.error("Log watcher crashed: {}. Restarting in 5 s…", exc, exc_info=True)
+            logger.error(
+                "Log watcher crashed [{}]: {}. Restarting in 5 s…",
+                srv.server_name, exc, exc_info=True,
+            )
             await asyncio.sleep(5)
 
 
 # ── Line dispatcher ───────────────────────────────────────────────────────────
 
-async def _process_line(line: str, pool: aiomysql.Pool, bot: commands.Bot) -> None:
+async def _process_line(
+    line: str, pool: aiomysql.Pool, bot: commands.Bot, srv: ServerContext
+) -> None:
     if not line:
         return
 
-    # Black Ice drop
     m = RE_BLACK_ICE_DROP.search(line)
     if m:
-        char_name = m.group("char").strip()
-        amount = int(m.group("amount"))
-        await _handle_black_ice_drop(pool, char_name, amount)
+        await _handle_black_ice_drop(pool, srv, m.group("char").strip(), int(m.group("amount")))
         return
 
-    # Kill event
     m = RE_KILL.search(line)
     if m:
-        await _handle_kill(bot, m.group("killer").strip(), m.group("victim").strip(), pool)
+        await _handle_kill(bot, m.group("killer").strip(), m.group("victim").strip(), pool, srv)
         return
 
-    # Chat messages (registration etc.)
     m = RE_CHAT.search(line)
     if m:
-        char_name = m.group(1)
-        message = m.group(2).strip()
-        await _handle_chat(pool, char_name, message)
+        await _handle_chat(pool, srv, m.group(1), m.group(2).strip())
         return
 
 
 # ── Handlers ──────────────────────────────────────────────────────────────────
 
-async def _handle_kill(bot: commands.Bot, killer: str, victim: str, pool: aiomysql.Pool) -> None:
+async def _handle_kill(
+    bot: commands.Bot, killer: str, victim: str, pool: aiomysql.Pool, srv: ServerContext
+) -> None:
     """Record kill in DB, update streaks/wanted, post to kill log channel."""
-    logger.debug("Kill event: '{}' killed '{}'", killer, victim)
-    sn = settings.server_name
+    logger.debug("Kill event [{}]: '{}' killed '{}'", srv.server_name, killer, victim)
+    sn = srv.server_name
     now = datetime.utcnow()
 
-    # Look up coordinates and platform IDs from currentusers
     killer_platformid = ""
     victim_platformid = ""
     kill_x, kill_y = 0, 0
@@ -167,7 +152,6 @@ async def _handle_kill(bot: commands.Bot, killer: str, victim: str, pool: aiomys
                 if row:
                     victim_platformid = row[0]
 
-                # Record in kill log
                 await cur.execute(
                     f"INSERT INTO {sn}_kill_log "
                     "(killer_name, killer_platformid, victim_name, victim_platformid, kill_x, kill_y, kill_time) "
@@ -175,15 +159,14 @@ async def _handle_kill(bot: commands.Bot, killer: str, victim: str, pool: aiomys
                     (killer, killer_platformid, victim, victim_platformid, kill_x, kill_y, now),
                 )
 
-                # Record in recent_pvp (kept for 15 min — cleaned by wanted_watcher)
                 await cur.execute(
                     f"INSERT INTO {sn}_recent_pvp (pvpname, x, y, loadDate) VALUES (%s, %s, %s, %s)",
                     (f"{killer} killed {victim}", kill_x, kill_y, now),
                 )
 
-                # Update killer's streak & wanted level
                 await cur.execute(
-                    f"INSERT INTO {sn}_wanted_players (player, platformid, kill_streak, wanted_level, last_kill, last_seen) "
+                    f"INSERT INTO {sn}_wanted_players "
+                    "(player, platformid, kill_streak, wanted_level, last_kill, last_seen) "
                     "VALUES (%s, %s, 1, 1, %s, %s) "
                     "ON DUPLICATE KEY UPDATE "
                     "kill_streak = kill_streak + 1, "
@@ -192,7 +175,6 @@ async def _handle_kill(bot: commands.Bot, killer: str, victim: str, pool: aiomys
                     (killer, killer_platformid, now, now, now, now, killer),
                 )
 
-                # Reset victim's streak
                 if victim_platformid:
                     await cur.execute(
                         f"UPDATE {sn}_wanted_players SET kill_streak = 0, wanted_level = 0 "
@@ -202,9 +184,8 @@ async def _handle_kill(bot: commands.Bot, killer: str, victim: str, pool: aiomys
 
                 await conn.commit()
     except Exception as exc:
-        logger.warning("Kill DB record error: {}", exc)
+        logger.warning("Kill DB record error [{}]: {}", sn, exc)
 
-    # Post to Discord kill log channel
     if settings.killlog_channel_id:
         chan = bot.get_channel(settings.killlog_channel_id)
         if chan:
@@ -219,11 +200,13 @@ async def _handle_kill(bot: commands.Bot, killer: str, victim: str, pool: aiomys
                 logger.warning("Could not post kill log to Discord: {}", exc)
 
 
-async def _handle_black_ice_drop(pool: aiomysql.Pool, char_name: str, amount: int) -> None:
+async def _handle_black_ice_drop(
+    pool: aiomysql.Pool, srv: ServerContext, char_name: str, amount: int
+) -> None:
     """Resolve char_name → platform_id and record the drop for conversion."""
     try:
         async with aiosqlite.connect(
-            f"file:{settings.game_db_path}?mode=ro", uri=True
+            f"file:{srv.game_db_path}?mode=ro", uri=True
         ) as game_db:
             game_db.row_factory = aiosqlite.Row
             async with game_db.execute(
@@ -238,24 +221,25 @@ async def _handle_black_ice_drop(pool: aiomysql.Pool, char_name: str, amount: in
             logger.warning("Black Ice drop: cannot resolve platform_id for '{}'", char_name)
             return
 
-        # Delegate to the converter's record function so all logic lives there
         from bot.tasks.black_ice_converter import record_black_ice_drop
-        await record_black_ice_drop(pool, row["platform_id"], amount)
-        logger.info("Logged drop: {} dropped {} Black Ice", char_name, amount)
+        await record_black_ice_drop(pool, srv, row["platform_id"], amount)
+        logger.info("Logged drop: {} dropped {} Black Ice [{}]", char_name, amount, srv.server_name)
 
     except Exception as exc:
         logger.error("_handle_black_ice_drop error for '{}': {}", char_name, exc)
 
 
-async def _handle_chat(pool: aiomysql.Pool, char_name: str, message: str) -> None:
-    """Process in-game chat commands."""
+async def _handle_chat(
+    pool: aiomysql.Pool, srv: ServerContext, char_name: str, message: str
+) -> None:
     m = RE_REGISTER_CMD.match(message)
     if m:
-        code = m.group(1).upper()
-        await _process_registration(pool, char_name, code)
+        await _process_registration(pool, srv, char_name, m.group(1).upper())
 
 
-async def _process_registration(pool: aiomysql.Pool, char_name: str, code: str) -> None:
+async def _process_registration(
+    pool: aiomysql.Pool, srv: ServerContext, char_name: str, code: str
+) -> None:
     """Complete the Discord ↔ Conan account link using the registration code."""
     try:
         async with pool.acquire() as conn:
@@ -269,13 +253,12 @@ async def _process_registration(pool: aiomysql.Pool, char_name: str, code: str) 
                 )
                 result = await cur.fetchone()
                 if not result:
-                    return  # invalid or already-used code
+                    return
 
                 discord_id = result[0]
 
-                # Resolve platform_id from game.db (character must be online)
                 async with aiosqlite.connect(
-                    f"file:{settings.game_db_path}?mode=ro", uri=True
+                    f"file:{srv.game_db_path}?mode=ro", uri=True
                 ) as game_db:
                     game_db.row_factory = aiosqlite.Row
                     async with game_db.execute(
@@ -306,8 +289,11 @@ async def _process_registration(pool: aiomysql.Pool, char_name: str, code: str) 
                 await conn.commit()
 
                 logger.info(
-                    "Registered: '{}' ({}) linked to Discord ID {}", char_name, platform_id, discord_id
+                    "Registered: '{}' ({}) linked to Discord ID {} [{}]",
+                    char_name, platform_id, discord_id, srv.server_name,
                 )
 
     except Exception as exc:
-        logger.error("_process_registration error for '{}' code {}: {}", char_name, code, exc)
+        logger.error(
+            "_process_registration error for '{}' code {}: {}", char_name, code, exc
+        )

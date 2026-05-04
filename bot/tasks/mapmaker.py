@@ -26,7 +26,7 @@ import discord
 from discord.ext import commands
 from loguru import logger
 
-from bot.config import settings
+from bot.config import settings, ServerContext
 
 # Maximum clans to show per leaderboard
 TOP_N = 15
@@ -39,10 +39,10 @@ except ImportError:
     _PILLOW = False
 
 
-async def post_leaderboards(pool: aiomysql.Pool, bot: commands.Bot) -> None:
-    logger.debug("Mapmaker/leaderboard running...")
+async def post_leaderboards(pool: aiomysql.Pool, srv: ServerContext, bot: commands.Bot) -> None:
+    logger.debug("Mapmaker/leaderboard running [{}]...", srv.server_name)
     try:
-        sn = settings.server_name
+        sn = srv.server_name
 
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:

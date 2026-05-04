@@ -11,16 +11,16 @@ from datetime import datetime, timedelta
 import aiomysql
 from loguru import logger
 
-from bot.config import settings
+from bot.config import settings, ServerContext
 
 
-async def pay_users(pool: aiomysql.Pool) -> None:
-    logger.debug("Payroll running...")
+async def pay_users(pool: aiomysql.Pool, srv: ServerContext) -> None:
+    logger.debug("Payroll running [{}]...", srv.server_name)
     try:
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
                 await cur.execute("SET NAMES utf8mb4")
-                sn = settings.server_name
+                sn = srv.server_name
 
                 await cur.execute(f"SELECT platformid FROM {sn}_currentusers")
                 online = [row[0] for row in await cur.fetchall()]

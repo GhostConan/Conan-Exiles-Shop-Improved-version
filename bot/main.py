@@ -9,12 +9,13 @@ import asyncio
 import sys
 from pathlib import Path
 
+import aiomysql
 import discord
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from discord.ext import commands
 from loguru import logger
 
-from bot.config import settings
+from bot.config import settings, ServerContext
 from bot.db import init_pool
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -50,9 +51,35 @@ def _build_bot() -> commands.Bot:
     return commands.Bot(command_prefix="!", intents=intents)
 
 
+async def _load_servers(pool: aiomysql.Pool) -> list[ServerContext]:
+    """Load all enabled server configs from the DB; fall back to .env if none found."""
+    try:
+        async with pool.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute("SELECT * FROM servers WHERE Enabled = 1")
+                rows = await cur.fetchall()
+        if rows:
+            servers = [ServerContext.from_db_row(row) for row in rows]
+            logger.info(
+                "Loaded {} server(s) from DB: {}",
+                len(servers), [s.server_name for s in servers],
+            )
+            return servers
+    except Exception as exc:
+        logger.warning("Could not load servers from DB, using .env defaults: {}", exc)
+
+    fallback = ServerContext.from_settings()
+    logger.info("Using single server from .env: {}", fallback.server_name)
+    return [fallback]
+
+
 async def main() -> None:
     # Initialise DB pool first so tasks and cogs can use it
     pool = await init_pool()
+
+    # Load per-server configs
+    servers = await _load_servers(pool)
+    servers_map = {s.server_name: s for s in servers}
 
     # Deferred imports avoid circular references at module level
     from bot.tasks.payroll import pay_users
@@ -66,27 +93,76 @@ async def main() -> None:
     from bot.tasks.mapmaker import post_leaderboards
     from bot.tasks.kill_leaderboards import post_kill_leaderboards
     from bot.tasks.wanted_watcher import check_wanted
+    from bot.tasks.teleporter import process_teleports
 
     # ── APScheduler ───────────────────────────────────────────────────────────
     scheduler = AsyncIOScheduler(timezone="UTC")
-    scheduler.add_job(pay_users,         "interval", minutes=settings.paycheck_interval_minutes,          args=[pool],       id="payroll",  misfire_grace_time=60)
-    scheduler.add_job(sync_players,      "interval", minutes=5,                                           args=[pool],       id="usersync", misfire_grace_time=60)
-    scheduler.add_job(process_orders,    "interval", seconds=5,                                           args=[pool],       id="orders",   misfire_grace_time=10)
-    scheduler.add_job(convert_black_ice, "interval", seconds=settings.black_ice_check_interval_seconds,  args=[pool],       id="blackice", misfire_grace_time=60)
-    scheduler.add_job(watch_game_db,     "interval", minutes=1,                                          args=[pool],       id="gamedb",   misfire_grace_time=60)
+
+    # Global tasks (not per-server)
+    scheduler.add_job(
+        process_orders, "interval", seconds=5,
+        args=[pool, servers_map], id="orders", misfire_grace_time=10,
+    )
+
+    # Per-server tasks
+    for srv in servers:
+        sn = srv.server_name
+        scheduler.add_job(
+            pay_users, "interval",
+            minutes=settings.paycheck_interval_minutes,
+            args=[pool, srv], id=f"payroll_{sn}", misfire_grace_time=60,
+        )
+        scheduler.add_job(
+            sync_players, "interval", minutes=5,
+            args=[pool, srv], id=f"usersync_{sn}", misfire_grace_time=60,
+        )
+        scheduler.add_job(
+            convert_black_ice, "interval",
+            seconds=settings.black_ice_check_interval_seconds,
+            args=[pool, srv], id=f"blackice_{sn}", misfire_grace_time=60,
+        )
+        scheduler.add_job(
+            process_teleports, "interval", seconds=2,
+            args=[pool, srv], id=f"teleporter_{sn}", misfire_grace_time=10,
+        )
+
     scheduler.start()
     logger.info("Scheduler started ({} jobs)", len(scheduler.get_jobs()))
 
     # ── Discord bot ───────────────────────────────────────────────────────────
     bot = _build_bot()
-    bot.db_pool = pool  # expose pool to cogs via bot attribute
+    bot.db_pool = pool
+    bot.servers = servers
+    bot.servers_map = servers_map
 
-    # Jobs that need the bot object (for Discord channel access) are added after bot is created
-    scheduler.add_job(check_server_buffs,    "interval", minutes=1,  args=[pool, bot], id="buffwatch",    misfire_grace_time=60)
-    scheduler.add_job(check_vault_expiry,    "interval", minutes=5,  args=[pool, bot], id="vaultwatch",   misfire_grace_time=60)
-    scheduler.add_job(post_leaderboards,     "interval", minutes=10, args=[pool, bot], id="leaderboard",  misfire_grace_time=60)
-    scheduler.add_job(post_kill_leaderboards,"interval", minutes=10, args=[pool, bot], id="killlb",       misfire_grace_time=60)
-    scheduler.add_job(check_wanted,          "interval", minutes=30, args=[pool, bot], id="wanted",       misfire_grace_time=120)
+    # Jobs that need the bot object are added after bot is created
+    for srv in servers:
+        sn = srv.server_name
+        scheduler.add_job(
+            watch_game_db, "interval", minutes=1,
+            args=[pool, srv, bot], id=f"gamedb_{sn}", misfire_grace_time=60,
+        )
+        scheduler.add_job(
+            check_server_buffs, "interval", minutes=1,
+            args=[pool, srv, bot], id=f"buffwatch_{sn}", misfire_grace_time=60,
+        )
+        scheduler.add_job(
+            check_vault_expiry, "interval", minutes=5,
+            args=[pool, srv, bot], id=f"vaultwatch_{sn}", misfire_grace_time=60,
+        )
+        scheduler.add_job(
+            post_leaderboards, "interval", minutes=1,       # updated: was 10 min
+            args=[pool, srv, bot], id=f"leaderboard_{sn}", misfire_grace_time=60,
+        )
+        scheduler.add_job(
+            post_kill_leaderboards, "interval", minutes=10,
+            args=[pool, srv, bot], id=f"killlb_{sn}", misfire_grace_time=60,
+        )
+        scheduler.add_job(
+            check_wanted, "interval", minutes=30,
+            args=[pool, srv, bot], id=f"wanted_{sn}", misfire_grace_time=120,
+        )
+
     logger.info("Scheduler has {} jobs total", len(scheduler.get_jobs()))
 
     @bot.event
@@ -99,8 +175,10 @@ async def main() -> None:
         await bot.load_extension(cog)
         logger.info("Loaded cog: {}", cog)
 
-    # Game log watcher runs as a persistent background coroutine
-    asyncio.get_event_loop().create_task(game_log_watcher(pool, bot))
+    # One game log watcher coroutine per server
+    loop = asyncio.get_event_loop()
+    for srv in servers:
+        loop.create_task(game_log_watcher(pool, bot, srv))
 
     async with bot:
         await bot.start(settings.discord_token)

@@ -18,20 +18,20 @@ import aiomysql
 from loguru import logger
 
 from bot import rcon as rcon_client
-from bot.config import settings
+from bot.config import settings, ServerContext
 
 
-async def sync_players(pool: aiomysql.Pool) -> None:
-    logger.debug("User sync running...")
+async def sync_players(pool: aiomysql.Pool, srv: ServerContext) -> None:
+    logger.debug("User sync running [{}]...", srv.server_name)
     try:
-        raw = await rcon_client.list_players()
-        await _process(pool, raw)
+        raw = await rcon_client.list_players_for(srv)
+        await _process(pool, raw, srv)
     except Exception as exc:
-        logger.error("User sync error: {}", exc, exc_info=True)
+        logger.error("User sync error [{}]: {}", srv.server_name, exc, exc_info=True)
 
 
-async def _process(pool: aiomysql.Pool, raw: str) -> None:
-    sn = settings.server_name
+async def _process(pool: aiomysql.Pool, raw: str, srv: ServerContext) -> None:
+    sn = srv.server_name
     now = datetime.now()
 
     async with pool.acquire() as conn:
@@ -40,7 +40,7 @@ async def _process(pool: aiomysql.Pool, raw: str) -> None:
             await cur.execute(f"DELETE FROM {sn}_currentusers")
 
             async with aiosqlite.connect(
-                f"file:{settings.game_db_path}?mode=ro", uri=True
+                f"file:{srv.game_db_path}?mode=ro", uri=True
             ) as game_db:
                 game_db.row_factory = aiosqlite.Row
 

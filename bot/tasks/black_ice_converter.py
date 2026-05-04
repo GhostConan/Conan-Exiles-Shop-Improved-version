@@ -38,16 +38,16 @@ import aiomysql
 from loguru import logger
 
 from bot import rcon as rcon_client
-from bot.config import settings
+from bot.config import settings, ServerContext
 
 
-async def convert_black_ice(pool: aiomysql.Pool) -> None:
-    logger.debug("Black Ice Converter: checking pending drops...")
+async def convert_black_ice(pool: aiomysql.Pool, srv: ServerContext) -> None:
+    logger.debug("Black Ice Converter: checking pending drops [{}]...", srv.server_name)
     try:
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
                 await cur.execute("SET NAMES utf8mb4")
-                sn = settings.server_name
+                sn = srv.server_name
                 rate = settings.black_ice_conversion_rate
                 pending_table = f"{sn}_black_ice_pending"
 
@@ -93,7 +93,7 @@ async def convert_black_ice(pool: aiomysql.Pool) -> None:
                     await conn.commit()
 
                     # Deliver bricks (online → RCON, offline → queue)
-                    await _deliver(cur, conn, platform_id, bricks)
+                    await _deliver(cur, conn, platform_id, bricks, srv)
 
                     logger.info(
                         "Black Ice Converter: {} Black Ice → {} Hardened Bricks for {} "
@@ -105,9 +105,9 @@ async def convert_black_ice(pool: aiomysql.Pool) -> None:
         logger.error("Black Ice Converter error: {}", exc, exc_info=True)
 
 
-async def _deliver(cur, conn, platform_id: str, bricks: int) -> None:
+async def _deliver(cur, conn, platform_id: str, bricks: int, srv: ServerContext) -> None:
     """Try immediate RCON delivery; fall back to order queue if player is offline."""
-    sn = settings.server_name
+    sn = srv.server_name
 
     await cur.execute(
         f"SELECT conid FROM {sn}_currentusers WHERE platformid = %s LIMIT 1",
@@ -118,7 +118,7 @@ async def _deliver(cur, conn, platform_id: str, bricks: int) -> None:
     if row:
         conid = row[0]
         try:
-            await rcon_client.give_item(conid, settings.hardened_brick_item_id, bricks)
+            await rcon_client.give_item_for(srv, conid, settings.hardened_brick_item_id, bricks)
             logger.info(
                 "Delivered {} Hardened Bricks to online player {} (conid={})",
                 bricks, platform_id, conid,
@@ -130,10 +130,10 @@ async def _deliver(cur, conn, platform_id: str, bricks: int) -> None:
             )
 
     # Player offline or RCON failed → add to order_processing for deferred delivery
-    await _queue(cur, conn, platform_id, bricks)
+    await _queue(cur, conn, platform_id, bricks, srv)
 
 
-async def _queue(cur, conn, platform_id: str, bricks: int) -> None:
+async def _queue(cur, conn, platform_id: str, bricks: int, srv: ServerContext) -> None:
     """Insert a deferred delivery order for an offline player."""
     order_num = str(uuid.uuid4())[:16]
     now = datetime.now()
@@ -149,7 +149,7 @@ async def _queue(cur, conn, platform_id: str, bricks: int) -> None:
             platform_id,
             now,
             now,
-            settings.server_name,
+            srv.server_name,
         ),
     )
     await conn.commit()
@@ -159,7 +159,7 @@ async def _queue(cur, conn, platform_id: str, bricks: int) -> None:
     )
 
 
-async def record_black_ice_drop(pool: aiomysql.Pool, platform_id: str, amount: int) -> None:
+async def record_black_ice_drop(pool: aiomysql.Pool, srv: ServerContext, platform_id: str, amount: int) -> None:
     """
     Called by game_log_watcher when a Black Ice drop event is detected.
     Inserts a pending conversion record.
@@ -168,7 +168,7 @@ async def record_black_ice_drop(pool: aiomysql.Pool, platform_id: str, amount: i
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
                 await cur.execute("SET NAMES utf8mb4")
-                sn = settings.server_name
+                sn = srv.server_name
                 await cur.execute(
                     f"INSERT INTO {sn}_black_ice_pending "
                     f"(platform_id, amount, processed, drop_time) "

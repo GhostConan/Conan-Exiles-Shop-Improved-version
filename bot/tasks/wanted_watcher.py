@@ -27,7 +27,7 @@ import discord
 from discord.ext import commands
 from loguru import logger
 
-from bot.config import settings
+from bot.config import settings, ServerContext
 
 DEGRADE_AFTER_HOURS = 48
 RECENT_PVP_TTL_MINUTES = 15
@@ -42,10 +42,10 @@ WANTED_LABELS = {
 }
 
 
-async def check_wanted(pool: aiomysql.Pool, bot: commands.Bot) -> None:
-    logger.debug("Wanted watcher running...")
+async def check_wanted(pool: aiomysql.Pool, srv: ServerContext, bot: commands.Bot) -> None:
+    logger.debug("Wanted watcher running [{}]...", srv.server_name)
     try:
-        sn = settings.server_name
+        sn = srv.server_name
         now = datetime.utcnow()
         degrade_cutoff = now - timedelta(hours=DEGRADE_AFTER_HOURS)
         pvp_cutoff = now - timedelta(minutes=RECENT_PVP_TTL_MINUTES)
