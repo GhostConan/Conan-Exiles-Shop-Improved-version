@@ -54,22 +54,45 @@ async def process_orders(pool: aiomysql.Pool) -> None:
                 await conn.commit()
 
                 sn = server_name or settings.server_name
-                await cur.execute(
-                    f"SELECT conid FROM {sn}_currentusers WHERE platformid = %s LIMIT 1",
-                    (platform_id,),
-                )
-                row = await cur.fetchone()
+                conid = None
 
-                if not row:
-                    await _mark_retry(cur, conn, order_num)
-                    return
-
-                conid = row[0]
+                # serverBuff targets the server, not a specific player — skip online check
+                if item_type != "serverBuff":
+                    await cur.execute(
+                        f"SELECT conid FROM {sn}_currentusers WHERE platformid = %s LIMIT 1",
+                        (platform_id,),
+                    )
+                    row = await cur.fetchone()
+                    if not row:
+                        await _mark_retry(cur, conn, order_num)
+                        return
+                    conid = row[0]
                 success = False
 
                 try:
                     if item_type == "knowledge":
                         await rcon_client.learn_feat(conid, int(item_id))
+                    elif item_type == "serverBuff":
+                        # serverBuff has no player target — activate on server (conid=0)
+                        # item_id here is the server_buffs.id; fetch the activate command
+                        await cur.execute(
+                            "SELECT activateCommand, duration_minutes FROM server_buffs WHERE id = %s",
+                            (item_id,),
+                        )
+                        buff = await cur.fetchone()
+                        if not buff or not buff[0]:
+                            logger.warning("Order {}: serverBuff id={} not found / no command", order_num, item_id)
+                            await _mark_retry(cur, conn, order_num)
+                            return
+                        activate_cmd, duration_min = buff
+                        await rcon_client.execute(activate_cmd)
+                        from datetime import timedelta
+                        end_time = datetime.now() + timedelta(minutes=int(duration_min or 60))
+                        await cur.execute(
+                            "UPDATE server_buffs SET isactive=1, lastActivated=%s, "
+                            "endTime=%s, lastActivatedBy=%s WHERE id=%s",
+                            (datetime.now(), end_time, platform_id, item_id),
+                        )
                     else:
                         await rcon_client.give_item(conid, int(item_id), int(qty))
                     success = True

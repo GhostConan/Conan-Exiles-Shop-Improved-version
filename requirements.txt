@@ -24,3 +24,6 @@ loguru>=0.7.2
 
 # Steam server query
 python-a2s>=1.3.0
+
+# Image generation (optional — used by mapmaker for map images)
+Pillow>=10.0.0
