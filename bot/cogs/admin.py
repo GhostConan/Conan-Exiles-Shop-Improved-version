@@ -213,13 +213,86 @@ class AdminCog(commands.Cog, name="Admin"):
             await interaction.followup.send(f"❌ RCON error: {exc}", ephemeral=True)
 
     # ── /processblackice ──────────────────────────────────────────────────────
-    @app_commands.command(name="processblackice", description="[ADMIN] Manually run the Black Ice → Hardened Brick converter.")
+    @app_commands.command(name="processblackice", description="[ADMIN] Manually run the Black Ice -> Hardened Brick converter.")
     @_admin_check()
     async def process_black_ice(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True)
         from bot.tasks.black_ice_converter import convert_black_ice
         await convert_black_ice(self.pool)
-        await interaction.followup.send("✅ Black Ice conversion cycle complete.", ephemeral=True)
+        await interaction.followup.send("Black Ice conversion cycle complete.", ephemeral=True)
+
+    # ── /wanted ───────────────────────────────────────────────────────────────
+    @app_commands.command(name="wanted", description="[ADMIN] Mark a player as wanted or view the wanted list.")
+    @app_commands.describe(player_name="Character name to mark wanted (leave blank to show list)")
+    @_admin_check()
+    async def wanted(self, interaction: discord.Interaction, player_name: str = "") -> None:
+        await interaction.response.defer(ephemeral=True)
+        sn = settings.server_name
+
+        if not player_name:
+            # Show top wanted players
+            async with self.pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute("SET NAMES utf8mb4")
+                    await cur.execute(
+                        f"SELECT player, kill_streak, wanted_level, bounty "
+                        f"FROM {sn}_wanted_players "
+                        "WHERE wanted_level > 0 ORDER BY wanted_level DESC LIMIT 15"
+                    )
+                    rows = await cur.fetchall()
+
+            if not rows:
+                await interaction.followup.send("No wanted players at this time.", ephemeral=True)
+                return
+
+            lines = [f"{'Player':<28} {'Streak':>6} {'Level':>5} {'Bounty':>8}",
+                     "-" * 52]
+            for player, streak, level, bounty in rows:
+                lines.append(f"{player or 'Unknown':<28} {streak:>6} {level:>5} {bounty:>8}")
+            await interaction.followup.send(f"```\n{chr(10).join(lines)}\n```", ephemeral=True)
+            return
+
+        # Mark the named player as wanted (level 3 minimum)
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SET NAMES utf8mb4")
+                await cur.execute(
+                    f"INSERT INTO {sn}_wanted_players (player, platformid, kill_streak, wanted_level) "
+                    "VALUES (%s, '', 0, 3) "
+                    "ON DUPLICATE KEY UPDATE wanted_level = GREATEST(wanted_level, 3), player = %s",
+                    (player_name, player_name),
+                )
+                await conn.commit()
+
+        await interaction.followup.send(
+            f"**{player_name}** has been marked as wanted (level 3).", ephemeral=True
+        )
+        logger.info("Admin {} marked {} as wanted", interaction.user, player_name)
+
+    # ── /bounty ───────────────────────────────────────────────────────────────
+    @app_commands.command(name="bounty", description="[ADMIN] Set a coin bounty on a player.")
+    @app_commands.describe(player_name="Character name", amount="Bounty amount in coins")
+    @_admin_check()
+    async def bounty(self, interaction: discord.Interaction, player_name: str, amount: int) -> None:
+        await interaction.response.defer(ephemeral=True)
+        sn = settings.server_name
+
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SET NAMES utf8mb4")
+                await cur.execute(
+                    f"INSERT INTO {sn}_wanted_players (player, platformid, kill_streak, wanted_level, bounty) "
+                    "VALUES (%s, '', 0, 1, %s) "
+                    "ON DUPLICATE KEY UPDATE bounty = %s, player = %s",
+                    (player_name, amount, amount, player_name),
+                )
+                await conn.commit()
+
+        await interaction.followup.send(
+            f"Bounty of **{amount:,} {settings.currency_name}** set on **{player_name}**.",
+            ephemeral=True,
+        )
+        logger.info("Admin {} set bounty {} on {}", interaction.user, amount, player_name)
 
 
 async def setup(bot: commands.Bot) -> None:

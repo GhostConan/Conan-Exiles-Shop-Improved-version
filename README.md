@@ -1,194 +1,606 @@
 # Conan Exiles Shop Bot
 
-A modern, fully async Discord bot for Conan Exiles dedicated servers.
-Built on **discord.py 2.x**, **APScheduler**, **aiomysql**, and **aiosqlite**.
+A fully asynchronous Discord bot for Conan Exiles dedicated servers. Combines an in-game shop, player economy, kill tracking, PVP leaderboards, vault rentals, and server buff management — all controlled through Discord slash commands.
 
 ---
 
-## ✨ Features
+## Table of Contents
 
-| Feature | Description |
-|---|---|
-| **Discord Shop** | Players browse, buy, and check balance via slash commands |
-| **Auto Delivery** | Items delivered in-game via RCON; queued for offline players |
-| **Payroll** | Online players earn currency on a configurable interval |
-| **Player Sync** | Online player list synced from RCON every 5 minutes |
-| **Registration** | Players link Discord ↔ Conan account with a one-time code |
-| **🧊 Black Ice Converter** | Every 2 min: converts dropped Black Ice → Hardened Bricks (10:1) |
-| **Server Buffs** | Timed server-wide buffs purchasable from the shop |
-| **Vault Rentals** | Players rent vaults via Discord for a per-day coin fee |
-| **Kill Log** | Kill events streamed live to a dedicated Discord channel |
-| **Building Leaderboard** | Clan building piece & inventory counts posted every 10 min |
-| **Building Tracker** | Clan building piece counts updated every minute |
-| **Jail System** | Admin can sentence, teleport, and auto-release players |
-| **Admin Commands** | Give currency/items, teleport, jail, broadcast — all slash commands |
+1. [Features](#features)
+2. [Requirements](#requirements)
+3. [Installation](#installation)
+4. [Configuration Reference](#configuration-reference)
+5. [Database Setup](#database-setup)
+6. [Running the Bot](#running-the-bot)
+7. [Docker Deployment](#docker-deployment)
+8. [Discord Commands](#discord-commands)
+9. [Background Tasks](#background-tasks)
+10. [Shop Item Types](#shop-item-types)
+11. [Black Ice Converter](#black-ice-converter)
+12. [Kill Tracking and Leaderboards](#kill-tracking-and-leaderboards)
+13. [Wanted Player System](#wanted-player-system)
+14. [Vault Rental System](#vault-rental-system)
+15. [Server Buffs](#server-buffs)
+16. [Jail System](#jail-system)
+17. [Adjusting Log Regexes](#adjusting-log-regexes)
+18. [Troubleshooting](#troubleshooting)
+19. [Tech Stack](#tech-stack)
 
 ---
 
-## 🏗️ Architecture
+## Features
 
+- In-game shop with slash commands — browse categories, buy items, check balance
+- Automatic RCON item delivery; orders are queued and retried for offline players
+- Periodic payroll — online players earn currency on a configurable interval
+- Player account registration linking Discord to a Conan character
+- Black Ice to Hardened Brick conversion (10:1, runs every 2 minutes)
+- Kill logging streamed to a dedicated Discord channel
+- Solo and clan PVP leaderboards across four time windows (1 day, 7 days, 30 days, all time)
+- Wanted player system with kill streaks, bounties, and automatic level degradation
+- Vault rental system with per-day pricing and automatic expiration
+- Timed server buffs purchasable from the shop
+- Building piece and inventory leaderboards updated every 10 minutes
+- Jail system with automatic release when sentence expires
+- Admin commands for currency, items, teleport, broadcast, and moderation
+
+---
+
+## Requirements
+
+| Requirement | Version | Notes |
+|---|---|---|
+| Python | 3.11 or newer | [python.org/downloads](https://www.python.org/downloads/) |
+| MariaDB | 10.6 or newer | Or use the included Docker Compose setup |
+| Git | Any recent version | [git-scm.com](https://git-scm.com/download/win) |
+| Conan Exiles dedicated server | — | RCON must be enabled |
+| Discord bot token | — | [discord.com/developers](https://discord.com/developers/applications) |
+
+**Enabling RCON on your Conan Exiles server:**
+
+Open `ConanSandbox/Saved/Config/WindowsServer/Engine.ini` and add:
+
+```ini
+[OnlineSubsystemSteam]
+RconEnabled=True
+RconPassword=your_password_here
+RconPort=25575
 ```
-Single asyncio event loop — no multiprocessing, no restart timers.
 
-┌─────────────────────────────────────────────────────┐
-│                    bot/main.py                       │
-│                                                     │
-│  discord.py Bot        APScheduler (async)          │
-│  ┌──────────────┐      ┌──────────────────────────┐ │
-│  │ cogs/shop    │      │ tasks/payroll      30min  │ │
-│  │ cogs/admin   │      │ tasks/usersync      5min  │ │
-│  │ cogs/register│      │ tasks/orderprocessing 5s  │ │
-│  └──────────────┘      │ tasks/black_ice_conv 2min │ │
-│                        │ tasks/game_db_watcher 1min│ │
-│                        └──────────────────────────┘ │
-│                                                     │
-│  tasks/game_log_watcher  (background coroutine)     │
-└─────────────────────────────────────────────────────┘
-        │                          │
-   MariaDB (aiomysql)        game.db (aiosqlite, read-only)
-```
+Restart the server after saving.
 
 ---
 
-## 📋 Prerequisites
+## Installation
 
-| Requirement | Notes |
-|---|---|
-| Python 3.11+ | [python.org](https://www.python.org/downloads/) |
-| MariaDB 10.6+ | Or use the included Docker Compose setup |
-| Conan Exiles dedicated server | With RCON enabled |
-| Discord Bot token | [discord.com/developers](https://discord.com/developers/applications) |
-
----
-
-## 🚀 Quick Start (Local)
-
-### 1 — Clone the repo
+### Step 1 — Download the bot
 
 ```bash
 git clone https://github.com/aquesada97/Conan-Exiles-Shop.git
 cd Conan-Exiles-Shop
 ```
 
-### 2 — Create a virtual environment
+If you do not have Git installed, download and install it from [git-scm.com](https://git-scm.com/download/win), then run the commands above in a new Command Prompt window.
 
-```bash
+### Step 2 — Create a virtual environment
+
+A virtual environment keeps the bot's dependencies isolated from other Python projects.
+
+**Windows:**
+```cmd
 python -m venv .venv
-# Windows
 .venv\Scripts\activate
-# macOS / Linux
+```
+
+**macOS / Linux:**
+```bash
+python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-### 3 — Install dependencies
+You should see `(.venv)` at the start of your terminal prompt after activation.
+
+### Step 3 — Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4 — Configure the bot
+This installs all required packages including discord.py, database drivers, and the scheduler.
+
+### Step 4 — Create your configuration file
 
 ```bash
-copy .env.example .env   # Windows
-# or
-cp .env.example .env     # macOS / Linux
+# Windows
+copy .env.example .env
+
+# macOS / Linux
+cp .env.example .env
 ```
 
-Open `.env` in a text editor and fill in **every** value.  
-See [Configuration Reference](#-configuration-reference) below for details.
+Open `.env` in any text editor and fill in every value. See the [Configuration Reference](#configuration-reference) section for a full explanation of each setting.
 
-### 5 — Set up the database
+---
 
-Make sure MariaDB is running and you have created an empty database matching `DB_NAME` in your `.env`.
+## Configuration Reference
+
+All settings are stored in the `.env` file. Below is a description of each section.
+
+### Database (MariaDB)
+
+| Key | Default | Description |
+|---|---|---|
+| DB_HOST | 127.0.0.1 | MariaDB server hostname or IP |
+| DB_PORT | 3306 | MariaDB port |
+| DB_USER | (required) | Database username |
+| DB_PASS | (required) | Database password |
+| DB_NAME | (required) | Database name (must exist before running setup) |
+
+### Conan Exiles Server
+
+| Key | Default | Description |
+|---|---|---|
+| SERVER_NAME | ConanExiles | Prefix for per-server tables. Alphanumeric only, no spaces. |
+| RCON_HOST | 127.0.0.1 | RCON host |
+| RCON_PORT | 25575 | RCON port |
+| RCON_PASS | (required) | RCON password |
+| STEAM_QUERY_PORT | 27015 | Steam query port for player count queries |
+| GAME_DB_PATH | (required) | Full path to the `game.db` SQLite file |
+| GAME_LOG_PATH | (required) | Full path to `ConanSandbox.log` |
+
+On Windows, use forward slashes or double backslashes in paths:
+```
+GAME_DB_PATH=C:/Conan/ConanSandbox/Saved/game.db
+GAME_LOG_PATH=C:/Conan/ConanSandbox/Saved/Logs/ConanSandbox.log
+```
+
+### Discord
+
+| Key | Default | Description |
+|---|---|---|
+| DISCORD_TOKEN | (required) | Your bot token from the Discord developer portal |
+| KILLLOG_CHANNEL_ID | 0 | Channel where kills are posted in real time |
+| SOLO_LB_1D_CHANNEL_ID | 0 | Solo kill leaderboard — last 24 hours |
+| SOLO_LB_7D_CHANNEL_ID | 0 | Solo kill leaderboard — last 7 days |
+| SOLO_LB_30D_CHANNEL_ID | 0 | Solo kill leaderboard — last 30 days |
+| SOLO_LB_ALL_CHANNEL_ID | 0 | Solo kill leaderboard — all time |
+| CLAN_LB_1D_CHANNEL_ID | 0 | Clan kill leaderboard — last 24 hours |
+| CLAN_LB_7D_CHANNEL_ID | 0 | Clan kill leaderboard — last 7 days |
+| CLAN_LB_30D_CHANNEL_ID | 0 | Clan kill leaderboard — last 30 days |
+| CLAN_LB_ALL_CHANNEL_ID | 0 | Clan kill leaderboard — all time |
+| BUILDING_TRACKING_CHANNEL_ID | 0 | Building piece leaderboard channel |
+| INVENTORY_TRACKING_CHANNEL_ID | 0 | Inventory leaderboard channel |
+| WANTED_CHANNEL_ID | 0 | Wanted player list channel |
+| JAIL_CHANNEL_ID | 0 | Jail event notifications channel |
+| SERVER_BUFFS_CHANNEL_ID | 0 | Server buff notifications channel |
+| VAULT_RENTAL_CHANNEL_ID | 0 | Vault rental notifications channel |
+| EVENT_CHANNEL_ID | 0 | General event announcements channel |
+
+Set any channel to `0` to disable that feature's Discord notifications.
+
+### Shop and Economy
+
+| Key | Default | Description |
+|---|---|---|
+| STARTING_CASH | 100 | Coins given to new players on first login |
+| PAYCHECK | 50 | Coins earned per payroll cycle |
+| PAYCHECK_INTERVAL_MINUTES | 30 | How often payroll runs |
+| CURRENCY_NAME | coins | Display name for the currency |
+
+### Black Ice Converter
+
+| Key | Default | Description |
+|---|---|---|
+| BLACK_ICE_ITEM_ID | 18040 | Conan Exiles template ID for Black Ice |
+| HARDENED_BRICK_ITEM_ID | 11142 | Conan Exiles template ID for Hardened Brick |
+| BLACK_ICE_CONVERSION_RATE | 10 | How many Black Ice equal one Hardened Brick |
+| BLACK_ICE_CHECK_INTERVAL_SECONDS | 120 | How often the converter runs (seconds) |
+
+### Jail / Prison
+
+| Key | Default | Description |
+|---|---|---|
+| PRISON_ENABLED | false | Enable escape detection and auto-release |
+| PRISON_EXIT_COORDS | 0 0 0 | X Y Z coordinates players teleport to on release |
+| PRISON_MIN_X | 0 | Prison zone boundary (minimum X) |
+| PRISON_MAX_X | 0 | Prison zone boundary (maximum X) |
+| PRISON_MIN_Y | 0 | Prison zone boundary (minimum Y) |
+| PRISON_MAX_Y | 0 | Prison zone boundary (maximum Y) |
+
+### Discord Roles
+
+| Key | Default | Description |
+|---|---|---|
+| ADMIN_ROLE | Admin | Discord role name with full admin access |
+| MOD_ROLE | Moderator | Discord role name with moderator access |
+| VIP1_ROLE | VIP1 | First VIP tier role name |
+| VIP2_ROLE | VIP2 | Second VIP tier role name |
+
+---
+
+## Database Setup
+
+Make sure MariaDB is running and the database named in `DB_NAME` already exists. Then run:
 
 ```bash
 python setup_db.py
 ```
 
-This creates all tables automatically.
+This creates all required tables and inserts a server record from your `.env` values. You only need to run this once. If you add new features later and need to update the schema, run it again — all `CREATE TABLE` statements use `IF NOT EXISTS` and will not overwrite existing data.
 
-### 6 — Add items to the shop *(optional)*
+### Adding items to the shop
 
-Connect to MariaDB and insert rows into `shop_items`:
+Connect to your MariaDB instance and insert rows into `shop_items`. The `itemType` controls how the item is delivered (see [Shop Item Types](#shop-item-types)).
 
 ```sql
+-- Single item (spawned directly into player inventory)
 INSERT INTO shop_items (itemName, itemDescription, itemPrice, itemid, itemType, category, isActive)
-VALUES
-  ('Iron Sword',    'A basic sword.',          50,  '51021', 'single',  'Weapons', 1),
-  ('Healing Wrap',  'Restores health.',         20,  '18252', 'single',  'Medical', 1),
-  ('Starter Kit',   'New player essentials.',  100,  '18040', 'kit',     'Kits',    1);
+VALUES ('Iron Sword', 'A basic iron sword.', 50, '51021', 'single', 'Weapons', 1);
+
+-- Knowledge item (teaches a feat via LearnFeat)
+INSERT INTO shop_items (itemName, itemDescription, itemPrice, itemid, itemType, category, isActive)
+VALUES ('Stonecutter Knowledge', 'Unlocks the stonecutter table.', 200, '18252', 'knowledge', 'Knowledge', 1);
+
+-- Vault rental (priced per day)
+INSERT INTO shop_items (itemName, itemDescription, itemPrice, itemid, itemType, category, isActive)
+VALUES ('Small Vault', 'A small personal storage vault.', 75, 'vault_small_1', 'vault', 'Rentals', 1);
 ```
 
-### 7 — Run the bot
+---
+
+## Running the Bot
+
+Activate your virtual environment first, then:
 
 ```bash
 python -m bot.main
 ```
 
+The bot will:
+1. Connect to MariaDB and initialise the connection pool
+2. Start all background tasks (payroll, user sync, order processing, etc.)
+3. Connect to Discord and sync slash commands
+4. Begin tailing the Conan server log
+
+Slash commands can take up to one hour to propagate globally on Discord. For instant testing, see the [Troubleshooting](#troubleshooting) section.
+
 ---
 
-## 🐳 Docker Deployment (Recommended for Production)
+## Docker Deployment
 
-### 1 — Set up `.env`
+Docker is the recommended way to run the bot in production. It handles the MariaDB dependency automatically.
 
-Same as step 4 above. Make sure `GAME_DB_PATH` and `GAME_LOG_PATH` point to the
-actual files on your **host** machine (they will be mounted read-only into the container).
+### Prerequisites
 
-### 2 — Start everything
+- Docker Desktop (Windows/macOS) or Docker Engine + Docker Compose (Linux)
+- Download: [docs.docker.com/get-docker](https://docs.docker.com/get-docker/)
+
+### Step 1 — Prepare your .env file
+
+Complete your `.env` file as described in the Configuration Reference. Make sure `GAME_DB_PATH` and `GAME_LOG_PATH` point to the actual files on your host machine — they are mounted read-only into the container.
+
+Set `DB_HOST=mariadb` (the Docker Compose service name) instead of `127.0.0.1`.
+
+### Step 2 — Start all services
 
 ```bash
 docker compose up -d
 ```
 
-This starts:
-- **MariaDB** (with persistent volume)
-- **Bot** (waits for MariaDB to be healthy before starting)
+This starts MariaDB and the bot. The bot waits for MariaDB to pass its health check before connecting.
 
-### 3 — Init the database (first run only)
+### Step 3 — Initialize the database (first run only)
 
 ```bash
 docker compose exec bot python setup_db.py
 ```
 
-### 4 — View logs
+### Step 4 — Check the logs
 
 ```bash
 docker compose logs -f bot
 ```
 
-### Useful Docker commands
+### Common Docker commands
 
 ```bash
-docker compose restart bot          # restart only the bot
-docker compose down                 # stop everything
-docker compose down -v              # stop + wipe database volume
+# Restart only the bot (after updating .env or code)
+docker compose restart bot
+
+# Stop all services
+docker compose down
+
+# Stop all services and delete the database volume
+docker compose down -v
+
+# View recent bot logs
+docker compose logs --tail=100 bot
 ```
 
 ---
 
-## ⚙️ Configuration Reference
+## Discord Commands
 
-All settings live in `.env`. Here are the most important ones:
+### Player Commands
 
-### MariaDB
-| Key | Default | Description |
+| Command | Description |
+|---|---|
+| `/register` | Generates a one-time code. Type `!register <code>` in-game to link your account. |
+| `/balance` | Shows your current coin balance. |
+| `/shop` | Lists all available shop items. Optionally filter by category: `/shop Weapons`. |
+| `/buy <item_name>` | Purchases an item. Delivery is automatic — instant if you are online, queued if offline. |
+| `/listvaults` | Shows vaults available to rent and their daily price. |
+| `/rentvault <vault_name> <days>` | Rents a vault for 1 to 30 days. Cost is deducted immediately. |
+| `/myvaults` | Lists your active vault rentals and their expiration times. |
+| `/releasevault <vault_name>` | Releases a vault rental early. No refund is issued. |
+
+### Admin Commands
+
+These commands require the Admin or Moderator Discord role configured in `.env`.
+
+| Command | Description |
+|---|---|
+| `/givecurrency <user> <amount>` | Adds coins to a player's wallet by Discord mention. |
+| `/giveitem <platform_id> <template_id> <qty>` | Spawns an item on an online player via RCON. |
+| `/jail <character> <minutes> [reason]` | Teleports a player to the prison coordinates for the given duration. |
+| `/teleport <character> <x> <y> <z>` | Teleports an online player to the specified coordinates. |
+| `/broadcast <message>` | Sends a message to all online players via RCON. |
+| `/processblackice` | Manually triggers the Black Ice to Hardened Brick conversion cycle. |
+| `/wanted [player_name]` | Marks a player as wanted (level 3), or shows the current wanted list if no name is given. |
+| `/bounty <player_name> <amount>` | Sets a coin bounty on a player. |
+
+---
+
+## Background Tasks
+
+The following tasks run automatically on a fixed schedule:
+
+| Task | Interval | Description |
 |---|---|---|
-| `DB_HOST` | `127.0.0.1` | MariaDB host |
-| `DB_PORT` | `3306` | MariaDB port |
-| `DB_USER` | *(required)* | Database user |
-| `DB_PASS` | *(required)* | Database password |
-| `DB_NAME` | *(required)* | Database name |
+| User sync | Every 5 minutes | Syncs the online player list from RCON into the database. Creates accounts for new players. |
+| Order processing | Every 5 seconds | Delivers one pending shop order. Retries failed orders after 5 minutes. |
+| Payroll | Configurable (default 30 min) | Pays all currently online players their paycheck amount. |
+| Black Ice converter | Every 2 minutes | Converts pending Black Ice drops into Hardened Bricks at the configured rate. |
+| Game DB watcher | Every 1 minute | Syncs building piece counts and inventory counts from game.db. Releases prisoners whose sentence has expired. |
+| Server buff watcher | Every 1 minute | Deactivates server buffs whose duration has elapsed. |
+| Vault watcher | Every 5 minutes | Marks expired vault rentals as inactive. Posts expiration notices to Discord. |
+| Building leaderboard | Every 10 minutes | Posts building piece and inventory count leaderboards to Discord. |
+| Kill leaderboards | Every 10 minutes | Posts solo and clan kill leaderboards across all four time windows. |
+| Wanted watcher | Every 30 minutes | Degrades wanted levels for inactive players. Cleans up old PVP position data. |
+| Log watcher | Continuous | Tails the Conan server log for kills, Black Ice drops, and in-game chat commands. |
 
-### Conan Server
-| Key | Default | Description |
+---
+
+## Shop Item Types
+
+The `itemType` column in `shop_items` controls how the order is fulfilled:
+
+| Type | Delivery Method |
+|---|---|
+| `single` | `spawnitem <template_id> <qty>` via RCON directly into the player's inventory |
+| `kit` | Same as `single` — used to distinguish kits visually in the shop |
+| `knowledge` | `LearnFeat <template_id>` via RCON — teaches the player a feat or knowledge |
+| `serverBuff` | Runs the `activateCommand` from the `server_buffs` table — no player target required |
+| `vault` | Creates a rental record in `{server_name}_vault_rentals` — admin must assign access in-game |
+
+---
+
+## Black Ice Converter
+
+Players drop Black Ice in-game. The bot detects these drops from the server log and accumulates them. Every two minutes, the converter runs and awards Hardened Bricks at the configured ratio.
+
+How it works:
+
+1. Player drops Black Ice in-game
+2. The log watcher detects the drop and records it in the database
+3. Every 2 minutes, the converter groups pending drops by player
+4. Bricks awarded = floor(total Black Ice / conversion rate)
+5. Any remainder carries over to the next cycle
+6. If the player is online, items are delivered instantly via RCON
+7. If the player is offline, the order is queued for delivery on next login
+
+Example: A player drops 35 Black Ice across several drops. The converter awards 3 Hardened Bricks and carries over 5 Black Ice to the next cycle.
+
+Default item IDs (configurable in `.env`):
+- Black Ice: `18040`
+- Hardened Brick: `11142`
+- Conversion rate: `10:1`
+
+---
+
+## Kill Tracking and Leaderboards
+
+Kill events are detected from the server log in real time and stored in the database with player names, platform IDs, and coordinates.
+
+Solo leaderboards rank individual players by kill count. Clan leaderboards group players by clan tag prefix (e.g. `[CLAN] PlayerName`).
+
+Four time windows are tracked independently for each board type:
+
+| Window | Discord Setting |
+|---|---|
+| Last 24 hours | `SOLO_LB_1D_CHANNEL_ID` / `CLAN_LB_1D_CHANNEL_ID` |
+| Last 7 days | `SOLO_LB_7D_CHANNEL_ID` / `CLAN_LB_7D_CHANNEL_ID` |
+| Last 30 days | `SOLO_LB_30D_CHANNEL_ID` / `CLAN_LB_30D_CHANNEL_ID` |
+| All time | `SOLO_LB_ALL_CHANNEL_ID` / `CLAN_LB_ALL_CHANNEL_ID` |
+
+Each leaderboard edits a single pinned message in the configured channel rather than posting new messages every cycle.
+
+---
+
+## Wanted Player System
+
+Players who kill others accumulate a kill streak which increases their wanted level. Wanted levels automatically degrade if the player has not killed anyone in 48 hours.
+
+| Wanted Level | Label | Approximate Streak |
 |---|---|---|
-| `SERVER_NAME` | `ConanExiles` | Prefix for per-server tables. Must be alphanumeric. |
-| `RCON_HOST` | `127.0.0.1` | RCON host |
-| `RCON_PORT` | `25575` | RCON port |
-| `RCON_PASS` | *(required)* | RCON password |
-| `GAME_DB_PATH` | *(required)* | Full path to `game.db` |
-| `GAME_LOG_PATH` | *(required)* | Full path to `ConanSandbox.log` |
+| 0 | Clean | No recent kills |
+| 1 | Minor | 1-2 kills |
+| 2 | Notable | 3-5 kills |
+| 3 | Dangerous | 6-10 kills |
+| 4 | Feared | 11-20 kills |
+| 5 | Most Wanted | 21+ kills |
 
+Admins can manually set a player as wanted with `/wanted <player_name>` or place a coin bounty with `/bounty <player_name> <amount>`. The wanted list is posted to the channel configured in `WANTED_CHANNEL_ID` and updated every 30 minutes.
+
+---
+
+## Vault Rental System
+
+Vaults are defined as items in `shop_items` with `itemType = 'vault'`. The `itemPrice` is the cost per day and `itemid` is the vault's unique identifier.
+
+```sql
+INSERT INTO shop_items (itemName, itemDescription, itemPrice, itemid, itemType, isActive)
+VALUES ('Vault Row A-1', 'Small vault in Row A.', 50, 'vault_a1', 'vault', 1);
+```
+
+Players rent vaults with `/rentvault`. The bot tracks the rental period and posts an expiration notice when it ends. Physical vault access (pin codes, ownership) must still be managed in-game by an admin.
+
+---
+
+## Server Buffs
+
+Server buffs are timed effects that run RCON commands on the entire server (not targeted at a specific player). They are added directly to the `server_buffs` table and purchased through the shop.
+
+```sql
+INSERT INTO server_buffs (serverName, buffName, buffDescription, buffPrice, duration_minutes, activateCommand, deactivateCommand)
+VALUES (
+  'ConanExiles',
+  'XP Boost 2x',
+  'Doubles experience gain for all players for 60 minutes.',
+  300,
+  60,
+  'SetServerSetting XPRateMultiplier 2',
+  'SetServerSetting XPRateMultiplier 1'
+);
+```
+
+Then link it to the shop by adding a `serverBuff` item where `itemid` matches the `server_buffs.id`:
+
+```sql
+INSERT INTO shop_items (itemName, itemDescription, itemPrice, itemid, itemType, isActive)
+VALUES ('XP Boost 2x', 'Doubles XP for all players for 60 minutes.', 300, '1', 'serverBuff', 1);
+```
+
+The buff watcher automatically runs the `deactivateCommand` when the duration expires and posts a notification to the `SERVER_BUFFS_CHANNEL_ID` channel.
+
+---
+
+## Jail System
+
+Admins send players to jail with `/jail <character> <minutes> [reason]`. The bot teleports the player to the coordinates in `PRISON_EXIT_COORDS` and records the sentence.
+
+When `PRISON_ENABLED=true`, the game DB watcher checks every minute whether sentenced players are still within the prison zone boundaries. Players whose sentence has expired are automatically teleported to the exit coordinates.
+
+Prison zone boundaries are set with:
+```
+PRISON_MIN_X, PRISON_MAX_X, PRISON_MIN_Y, PRISON_MAX_Y
+```
+
+---
+
+## Adjusting Log Regexes
+
+The log watcher uses regular expressions to detect events. If your server version or mods produce a different log format, open `bot/tasks/game_log_watcher.py` and adjust the relevant pattern.
+
+Kill events:
+```python
+RE_KILL = re.compile(
+    r"'(?P<victim>[^']+)'\s+was\s+killed\s+by\s+'?(?P<killer>[^'\[]+?)'?\s*(?:\[|$)",
+    re.IGNORECASE,
+)
+```
+
+Black Ice drops:
+```python
+RE_BLACK_ICE_DROP = re.compile(
+    r"(?P<char>.+?)\s+dropped\s+Black\s*Ice\s+(?:amount:|x)(?P<amount>\d+)",
+    re.IGNORECASE,
+)
+```
+
+To find the correct format, enable `DEBUG` logging and observe how the lines appear in `logs/bot.log` when the event occurs in-game.
+
+---
+
+## Troubleshooting
+
+**Slash commands do not appear in Discord**
+
+Global slash commands can take up to one hour to propagate. To sync instantly to a specific server during testing, edit `bot/main.py` and change:
+
+```python
+synced = await bot.tree.sync()
+```
+
+to:
+
+```python
+synced = await bot.tree.sync(guild=discord.Object(id=YOUR_SERVER_ID))
+```
+
+Replace `YOUR_SERVER_ID` with your Discord server's ID. To find it: right-click the server icon and select Copy Server ID (you may need to enable Developer Mode in Discord settings under Advanced).
+
+**RCON connection refused**
+
+- Confirm `RCON_HOST`, `RCON_PORT`, and `RCON_PASS` match what is in `Engine.ini`
+- Ensure `RconEnabled=True` is set in `Engine.ini`
+- Check that the RCON port is not blocked by a firewall
+- Test manually: `rcon -H 127.0.0.1 -P 25575 -p yourpassword listplayers`
+
+**Black Ice drops are not being detected**
+
+- Confirm `GAME_LOG_PATH` points to the live log file, not a copy or archive
+- Drop Black Ice in-game and search `logs/bot.log` for a line containing `dropped`
+- If no line appears, the log format differs from the regex — update `RE_BLACK_ICE_DROP`
+
+**Players are not being synced**
+
+- Check that `listplayers` returns output when run manually via RCON
+- Review `logs/bot.log` for errors from the user sync task
+
+**game.db errors**
+
+- The bot opens `game.db` as read-only. Ensure the path in `GAME_DB_PATH` is correct and the file exists
+- On a live server, `game.db` is usually located at: `ConanSandbox/Saved/game.db`
+
+**Items are not delivered after purchase**
+
+- Check that the player is online and their `platformid` is correctly linked in the `accounts` table
+- Review `order_processing` in the database for rows with `completed=0` and check the `last_attempt` timestamp
+- Orders are retried every 5 minutes — the player must be online at the time of retry
+
+**Enable verbose logging**
+
+Edit `bot/main.py` and change the console log level from `INFO` to `DEBUG`:
+
+```python
+logger.add(sys.stderr, level="DEBUG", ...)
+```
+
+---
+
+## Tech Stack
+
+| Library | Purpose |
+|---|---|
+| discord.py 2.x | Discord bot, slash commands, Cogs |
+| APScheduler 3.x | Async task scheduling |
+| aiomysql | Async MariaDB connection pool |
+| aiosqlite | Read-only async access to game.db |
+| rcon | RCON protocol client |
+| pydantic-settings | Config validation from .env |
+| loguru | Structured logging with file rotation |
+| aiofiles | Async server log tailing |
+| Pillow (optional) | Map image generation |
+
+---
+
+## Credits
+
+Based on work from [irrelevantgamers/Conan-Shop](https://github.com/irrelevantgamers/Conan-Shop) and [irrelevantgamers/IG_Bot](https://github.com/irrelevantgamers/IG_Bot), licensed under GPL-3.0.
+
+This project is released under the **GPL-3.0 License**.
+
 ### Shop
 | Key | Default | Description |
 |---|---|---|
@@ -358,8 +770,4 @@ For instant testing, sync to a specific guild by replacing `await bot.tree.sync(
 
 ---
 
-## 📄 License
 
-Based on work from [irrelevantgamers/Conan-Shop](https://github.com/irrelevantgamers/Conan-Shop)
-and [irrelevantgamers/IG_Bot](https://github.com/irrelevantgamers/IG_Bot), licensed under GPL-3.0.  
-This project is also released under **GPL-3.0**.

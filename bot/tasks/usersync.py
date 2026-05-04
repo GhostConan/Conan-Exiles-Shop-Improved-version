@@ -82,6 +82,14 @@ async def _process(pool: aiomysql.Pool, raw: str) -> None:
                             (conid, player_name, platform_id, steam_id, int(x), int(y), now),
                         )
 
+                        # Mirror to historical users (full session history)
+                        await cur.execute(
+                            f"INSERT INTO {sn}_historicalusers "
+                            "(conid, player, platformid, steamPlatformId, X, Y, loadDate) "
+                            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                            (conid, player_name, platform_id, steam_id, int(x), int(y), now),
+                        )
+
                         # Auto-create account for first-time players
                         await cur.execute(
                             "SELECT ID FROM accounts WHERE conanplatformid = %s", (platform_id,)
