@@ -64,6 +64,8 @@ async def main() -> None:
     from bot.tasks.serverbuff_watcher import check_server_buffs
     from bot.tasks.vault_watcher import check_vault_expiry
     from bot.tasks.mapmaker import post_leaderboards
+    from bot.tasks.kill_leaderboards import post_kill_leaderboards
+    from bot.tasks.wanted_watcher import check_wanted
 
     # ── APScheduler ───────────────────────────────────────────────────────────
     scheduler = AsyncIOScheduler(timezone="UTC")
@@ -80,9 +82,11 @@ async def main() -> None:
     bot.db_pool = pool  # expose pool to cogs via bot attribute
 
     # Jobs that need the bot object (for Discord channel access) are added after bot is created
-    scheduler.add_job(check_server_buffs, "interval", minutes=1,  args=[pool, bot], id="buffwatch",  misfire_grace_time=60)
-    scheduler.add_job(check_vault_expiry, "interval", minutes=5,  args=[pool, bot], id="vaultwatch", misfire_grace_time=60)
-    scheduler.add_job(post_leaderboards,  "interval", minutes=10, args=[pool, bot], id="leaderboard",misfire_grace_time=60)
+    scheduler.add_job(check_server_buffs,    "interval", minutes=1,  args=[pool, bot], id="buffwatch",    misfire_grace_time=60)
+    scheduler.add_job(check_vault_expiry,    "interval", minutes=5,  args=[pool, bot], id="vaultwatch",   misfire_grace_time=60)
+    scheduler.add_job(post_leaderboards,     "interval", minutes=10, args=[pool, bot], id="leaderboard",  misfire_grace_time=60)
+    scheduler.add_job(post_kill_leaderboards,"interval", minutes=10, args=[pool, bot], id="killlb",       misfire_grace_time=60)
+    scheduler.add_job(check_wanted,          "interval", minutes=30, args=[pool, bot], id="wanted",       misfire_grace_time=120)
     logger.info("Scheduler has {} jobs total", len(scheduler.get_jobs()))
 
     @bot.event

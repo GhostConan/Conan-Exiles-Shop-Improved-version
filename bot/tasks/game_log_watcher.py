@@ -121,7 +121,7 @@ async def _process_line(line: str, pool: aiomysql.Pool, bot: commands.Bot) -> No
     # Kill event
     m = RE_KILL.search(line)
     if m:
-        await _handle_kill(bot, m.group("killer").strip(), m.group("victim").strip())
+        await _handle_kill(bot, m.group("killer").strip(), m.group("victim").strip(), pool)
         return
 
     # Chat messages (registration etc.)
@@ -135,27 +135,88 @@ async def _process_line(line: str, pool: aiomysql.Pool, bot: commands.Bot) -> No
 
 # ── Handlers ──────────────────────────────────────────────────────────────────
 
-async def _handle_kill(bot: commands.Bot, killer: str, victim: str) -> None:
-    """Post kill event to the kill log Discord channel."""
+async def _handle_kill(bot: commands.Bot, killer: str, victim: str, pool: aiomysql.Pool) -> None:
+    """Record kill in DB, update streaks/wanted, post to kill log channel."""
     logger.debug("Kill event: '{}' killed '{}'", killer, victim)
+    sn = settings.server_name
+    now = datetime.utcnow()
 
-    if not settings.killlog_channel_id:
-        return
-
-    chan = bot.get_channel(settings.killlog_channel_id)
-    if not chan:
-        return
+    # Look up coordinates and platform IDs from currentusers
+    killer_platformid = ""
+    victim_platformid = ""
+    kill_x, kill_y = 0, 0
 
     try:
-        embed = discord.Embed(
-            title="⚔️ Kill",
-            colour=discord.Colour.dark_red(),
-            description=f"**{killer}** killed **{victim}**",
-        )
-        embed.timestamp = datetime.utcnow()
-        await chan.send(embed=embed)
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SET NAMES utf8mb4")
+
+                await cur.execute(
+                    f"SELECT platformid, X, Y FROM {sn}_currentusers WHERE player = %s LIMIT 1",
+                    (killer,),
+                )
+                row = await cur.fetchone()
+                if row:
+                    killer_platformid, kill_x, kill_y = row
+
+                await cur.execute(
+                    f"SELECT platformid FROM {sn}_currentusers WHERE player = %s LIMIT 1",
+                    (victim,),
+                )
+                row = await cur.fetchone()
+                if row:
+                    victim_platformid = row[0]
+
+                # Record in kill log
+                await cur.execute(
+                    f"INSERT INTO {sn}_kill_log "
+                    "(killer_name, killer_platformid, victim_name, victim_platformid, kill_x, kill_y, kill_time) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    (killer, killer_platformid, victim, victim_platformid, kill_x, kill_y, now),
+                )
+
+                # Record in recent_pvp (kept for 15 min — cleaned by wanted_watcher)
+                await cur.execute(
+                    f"INSERT INTO {sn}_recent_pvp (pvpname, x, y, loadDate) VALUES (%s, %s, %s, %s)",
+                    (f"{killer} killed {victim}", kill_x, kill_y, now),
+                )
+
+                # Update killer's streak & wanted level
+                await cur.execute(
+                    f"INSERT INTO {sn}_wanted_players (player, platformid, kill_streak, wanted_level, last_kill, last_seen) "
+                    "VALUES (%s, %s, 1, 1, %s, %s) "
+                    "ON DUPLICATE KEY UPDATE "
+                    "kill_streak = kill_streak + 1, "
+                    "wanted_level = LEAST(5, FLOOR(LOG2(kill_streak + 2))), "
+                    "last_kill = %s, last_seen = %s, player = %s",
+                    (killer, killer_platformid, now, now, now, now, killer),
+                )
+
+                # Reset victim's streak
+                if victim_platformid:
+                    await cur.execute(
+                        f"UPDATE {sn}_wanted_players SET kill_streak = 0, wanted_level = 0 "
+                        "WHERE platformid = %s",
+                        (victim_platformid,),
+                    )
+
+                await conn.commit()
     except Exception as exc:
-        logger.warning("Could not post kill log to Discord: {}", exc)
+        logger.warning("Kill DB record error: {}", exc)
+
+    # Post to Discord kill log channel
+    if settings.killlog_channel_id:
+        chan = bot.get_channel(settings.killlog_channel_id)
+        if chan:
+            try:
+                embed = discord.Embed(
+                    colour=discord.Colour.dark_red(),
+                    description=f"**{killer}** killed **{victim}**",
+                )
+                embed.timestamp = now
+                await chan.send(embed=embed)
+            except Exception as exc:
+                logger.warning("Could not post kill log to Discord: {}", exc)
 
 
 async def _handle_black_ice_drop(pool: aiomysql.Pool, char_name: str, amount: int) -> None:

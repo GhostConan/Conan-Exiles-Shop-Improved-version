@@ -221,6 +221,63 @@ TABLES: list[str] = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     """,
 
+    f"""
+    CREATE TABLE IF NOT EXISTS {SN}_kill_log (
+        ID               INT          AUTO_INCREMENT PRIMARY KEY,
+        killer_name      VARCHAR(200),
+        killer_platformid VARCHAR(100),
+        victim_name      VARCHAR(200),
+        victim_platformid VARCHAR(100),
+        kill_x           INT          NOT NULL DEFAULT 0,
+        kill_y           INT          NOT NULL DEFAULT 0,
+        kill_time        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_killer  (killer_platformid, kill_time),
+        INDEX idx_victim  (victim_platformid, kill_time),
+        INDEX idx_time    (kill_time)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    """,
+
+    f"""
+    CREATE TABLE IF NOT EXISTS {SN}_wanted_players (
+        ID           INT          AUTO_INCREMENT PRIMARY KEY,
+        player       VARCHAR(200),
+        platformid   VARCHAR(100) UNIQUE,
+        kill_streak  INT          NOT NULL DEFAULT 0,
+        wanted_level INT          NOT NULL DEFAULT 0,
+        bounty       INT          NOT NULL DEFAULT 0,
+        last_kill    DATETIME,
+        last_seen    DATETIME,
+        INDEX idx_wanted (wanted_level, last_kill)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    """,
+
+    f"""
+    CREATE TABLE IF NOT EXISTS {SN}_recent_pvp (
+        ID        INT          AUTO_INCREMENT PRIMARY KEY,
+        pvpname   VARCHAR(400),
+        x         INT          NOT NULL DEFAULT 0,
+        y         INT          NOT NULL DEFAULT 0,
+        loadDate  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_loaddate (loadDate)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    """,
+
+    f"""
+    CREATE TABLE IF NOT EXISTS {SN}_historicalusers (
+        ID              INT          AUTO_INCREMENT PRIMARY KEY,
+        conid           VARCHAR(20),
+        player          VARCHAR(200),
+        userid          VARCHAR(200),
+        platformid      VARCHAR(100),
+        steamPlatformId VARCHAR(100),
+        X               INT          NOT NULL DEFAULT 0,
+        Y               INT          NOT NULL DEFAULT 0,
+        loadDate        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_platform (platformid),
+        INDEX idx_loaddate (loadDate)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    """,
+
     # ── Black Ice Converter table ──────────────────────────────────────────────
     f"""
     CREATE TABLE IF NOT EXISTS {SN}_black_ice_pending (
