@@ -1,0 +1,43 @@
+services:
+
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # Mount the Conan game.db and log file from your host machine.
+      # Adjust these paths to match your actual Conan server install location.
+      - ${GAME_DB_PATH}:${GAME_DB_PATH}:ro
+      - ${GAME_LOG_PATH}:${GAME_LOG_PATH}:ro
+      # Persist log output
+      - ./logs:/app/logs
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    networks:
+      - botnet
+
+  mariadb:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: rootpassword   # change this
+      MARIADB_DATABASE: ${DB_NAME}
+      MARIADB_USER: ${DB_USER}
+      MARIADB_PASSWORD: ${DB_PASS}
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - botnet
+
+volumes:
+  mariadb_data:
+
+networks:
+  botnet:
+    driver: bridge
