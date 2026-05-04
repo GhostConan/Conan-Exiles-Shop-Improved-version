@@ -22,9 +22,11 @@ A fully asynchronous Discord bot for Conan Exiles dedicated servers. Combines an
 14. [Vault Rental System](#vault-rental-system)
 15. [Server Buffs](#server-buffs)
 16. [Jail System](#jail-system)
-17. [Adjusting Log Regexes](#adjusting-log-regexes)
-18. [Troubleshooting](#troubleshooting)
-19. [Tech Stack](#tech-stack)
+17. [Multi-Server Support](#multi-server-support)
+18. [Watchdog (Process Supervisor)](#watchdog-process-supervisor)
+19. [Adjusting Log Regexes](#adjusting-log-regexes)
+20. [Troubleshooting](#troubleshooting)
+21. [Tech Stack](#tech-stack)
 
 ---
 
@@ -40,8 +42,12 @@ A fully asynchronous Discord bot for Conan Exiles dedicated servers. Combines an
 - Wanted player system with kill streaks, bounties, and automatic level degradation
 - Vault rental system with per-day pricing and automatic expiration
 - Timed server buffs purchasable from the shop
-- Building piece and inventory leaderboards updated every 10 minutes
-- Jail system with automatic release when sentence expires
+- Building piece and inventory leaderboards updated every 1 minute
+- Jail system with automatic release, Discord notifications, and escape detection
+- Multi-server support — manage multiple Conan Exiles servers from one bot instance
+- Teleporter task — processes queued teleports from jail releases and admin commands
+- External watchdog (watchdog.py) — auto-restarts the bot on crash with scheduled periodic restarts
+- systemd service file (conan-shop.service) included for Linux deployments
 - Admin commands for currency, items, teleport, broadcast, and moderation
 
 ---
@@ -361,13 +367,16 @@ The following tasks run automatically on a fixed schedule:
 | Order processing | Every 5 seconds | Delivers one pending shop order. Retries failed orders after 5 minutes. |
 | Payroll | Configurable (default 30 min) | Pays all currently online players their paycheck amount. |
 | Black Ice converter | Every 2 minutes | Converts pending Black Ice drops into Hardened Bricks at the configured rate. |
-| Game DB watcher | Every 1 minute | Syncs building piece counts and inventory counts from game.db. Releases prisoners whose sentence has expired. |
+| Game DB watcher | Every 1 minute | Syncs building piece counts and inventory counts from game.db. Releases prisoners whose sentence has expired, sends Discord notification, and detects escapes. |
+| Teleporter | Every 2 seconds | Executes queued TeleportPlayer RCON commands (jail releases, admin teleports). |
 | Server buff watcher | Every 1 minute | Deactivates server buffs whose duration has elapsed. |
 | Vault watcher | Every 5 minutes | Marks expired vault rentals as inactive. Posts expiration notices to Discord. |
-| Building leaderboard | Every 10 minutes | Posts building piece and inventory count leaderboards to Discord. |
+| Building leaderboard | Every 1 minute | Posts building piece and inventory count leaderboards to Discord. |
 | Kill leaderboards | Every 10 minutes | Posts solo and clan kill leaderboards across all four time windows. |
 | Wanted watcher | Every 30 minutes | Degrades wanted levels for inactive players. Cleans up old PVP position data. |
 | Log watcher | Continuous | Tails the Conan server log for kills, Black Ice drops, and in-game chat commands. |
+
+All per-server tasks run independently for each server in the `servers` table. Adding a new server row automatically starts its own task set on next bot restart.
 
 ---
 
@@ -489,11 +498,66 @@ The buff watcher automatically runs the `deactivateCommand` when the duration ex
 
 Admins send players to jail with `/jail <character> <minutes> [reason]`. The bot teleports the player to the coordinates in `PRISON_EXIT_COORDS` and records the sentence.
 
-When `PRISON_ENABLED=true`, the game DB watcher checks every minute whether sentenced players are still within the prison zone boundaries. Players whose sentence has expired are automatically teleported to the exit coordinates.
+When `PRISON_ENABLED=true`, the game DB watcher checks every minute whether sentenced players are still within the prison zone boundaries.
+
+- When a sentence expires, the player is added to the teleport queue, released from jail, and a Discord embed is posted to the jail channel.
+- If a jailed player moves outside the prison boundary before their sentence expires, the bot detects the escape, teleports them back, and posts a Discord notification.
 
 Prison zone boundaries are set with:
 ```
 PRISON_MIN_X, PRISON_MAX_X, PRISON_MIN_Y, PRISON_MAX_Y
+```
+
+---
+
+## Multi-Server Support
+
+The bot can manage multiple Conan Exiles servers from a single instance. Add one row per server to the `servers` table:
+
+```sql
+INSERT INTO servers (ServerName, DatabaseLocation, LogLocation, Prison_Exit_Coordinates, Enabled)
+VALUES (
+    'MyServer',
+    '/path/to/game.db',
+    '/path/to/ConanSandbox.log',
+    '100000 200000 -3600',
+    1
+);
+```
+
+On startup, the bot reads all rows where `Enabled = 1` and starts a full set of background tasks for each server. If the `servers` table is empty or unreachable, the bot falls back to the single-server configuration in `.env`.
+
+Each server uses its own table prefix (`{ServerName}_currentusers`, `{ServerName}_teleport_requests`, etc.), its own log watcher, and its own RCON connection.
+
+---
+
+## Watchdog (Process Supervisor)
+
+`watchdog.py` wraps the bot process and automatically restarts it on crash. Use this instead of running `bot.main` directly in production.
+
+```bash
+python watchdog.py
+```
+
+Configuration via environment variables (or `.env`):
+
+| Variable | Default | Description |
+|---|---|---|
+| `WATCHDOG_RESTART_HOURS` | `6` | Scheduled full restart interval in hours. Set to `0` to disable. |
+| `WATCHDOG_RESTART_DELAY` | `5` | Seconds to wait between a crash and a restart attempt. |
+| `WATCHDOG_MAX_CRASHES` | `10` | Maximum crashes within the crash window before watchdog gives up. |
+| `WATCHDOG_CRASH_WINDOW` | `60` | Time window in seconds for counting rapid crashes. |
+
+Watchdog logs to `logs/watchdog.log`.
+
+On Linux with systemd, use the included `conan-shop.service` unit file instead:
+
+```bash
+# Edit the paths in the file first, then:
+sudo cp conan-shop.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now conan-shop
+sudo journalctl -u conan-shop -f
 ```
 
 ---

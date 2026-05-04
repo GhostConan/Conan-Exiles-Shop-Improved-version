@@ -21,7 +21,13 @@ from discord.ext import commands
 from loguru import logger
 
 from bot import rcon as rcon_client
-from bot.config import settings
+from bot.config import settings, ServerContext
+
+
+def _get_srv(bot) -> ServerContext:
+    """Return the primary ServerContext (first DB server or .env fallback)."""
+    servers_map = getattr(bot, "servers_map", {})
+    return servers_map.get(settings.server_name) or ServerContext.from_settings()
 
 
 def _admin_check():
@@ -85,8 +91,9 @@ class AdminCog(commands.Cog, name="Admin"):
         async with self.pool.acquire() as conn:
             async with conn.cursor() as cur:
                 await cur.execute("SET NAMES utf8mb4")
+                srv = _get_srv(self.bot)
                 await cur.execute(
-                    f"SELECT conid FROM {settings.server_name}_currentusers WHERE platformid = %s LIMIT 1",
+                    f"SELECT conid FROM {srv.server_name}_currentusers WHERE platformid = %s LIMIT 1",
                     (platform_id,),
                 )
                 row = await cur.fetchone()
@@ -96,7 +103,8 @@ class AdminCog(commands.Cog, name="Admin"):
             return
 
         try:
-            resp = await rcon_client.give_item(row[0], template_id, quantity)
+            srv = _get_srv(self.bot)
+            resp = await rcon_client.give_item_for(srv, row[0], template_id, quantity)
             await interaction.followup.send(
                 f"✅ Gave **{quantity}× item `{template_id}`** to `{platform_id}`.\n```{resp[:300]}```",
                 ephemeral=True,
@@ -132,10 +140,13 @@ class AdminCog(commands.Cog, name="Admin"):
 
                 platform_id, conid = row
 
-                # Teleport to prison
-                parts = settings.prison_exit_coords.split()
+                # Teleport to prison entrance
+                srv = _get_srv(self.bot)
+                parts = srv.prison_exit_coords.split()
                 if len(parts) == 3:
-                    await rcon_client.teleport_player(conid, int(parts[0]), int(parts[1]), int(parts[2]))
+                    await rcon_client.execute_for(
+                        srv, f"con {conid} TeleportPlayer {parts[0]} {parts[1]} {parts[2]}"
+                    )
 
                 # Record sentence
                 await cur.execute(
@@ -182,8 +193,9 @@ class AdminCog(commands.Cog, name="Admin"):
         async with self.pool.acquire() as conn:
             async with conn.cursor() as cur:
                 await cur.execute("SET NAMES utf8mb4")
+                srv = _get_srv(self.bot)
                 await cur.execute(
-                    f"SELECT conid FROM {settings.server_name}_currentusers WHERE player = %s LIMIT 1",
+                    f"SELECT conid FROM {srv.server_name}_currentusers WHERE player = %s LIMIT 1",
                     (player_name,),
                 )
                 row = await cur.fetchone()
@@ -193,7 +205,8 @@ class AdminCog(commands.Cog, name="Admin"):
             return
 
         try:
-            await rcon_client.teleport_player(row[0], x, y, z)
+            srv = _get_srv(self.bot)
+            await rcon_client.execute_for(srv, f"con {row[0]} TeleportPlayer {x} {y} {z}")
             await interaction.followup.send(
                 f"✅ Teleported **{player_name}** to `{x} {y} {z}`.", ephemeral=True
             )
@@ -207,7 +220,8 @@ class AdminCog(commands.Cog, name="Admin"):
     async def broadcast_cmd(self, interaction: discord.Interaction, message: str) -> None:
         await interaction.response.defer(ephemeral=True)
         try:
-            await rcon_client.broadcast(message)
+            srv = _get_srv(self.bot)
+            await rcon_client.broadcast_for(srv, message)
             await interaction.followup.send(f"✅ Broadcast sent: *{message}*", ephemeral=True)
         except Exception as exc:
             await interaction.followup.send(f"❌ RCON error: {exc}", ephemeral=True)
@@ -218,7 +232,8 @@ class AdminCog(commands.Cog, name="Admin"):
     async def process_black_ice(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True)
         from bot.tasks.black_ice_converter import convert_black_ice
-        await convert_black_ice(self.pool)
+        srv = _get_srv(self.bot)
+        await convert_black_ice(self.pool, srv)
         await interaction.followup.send("Black Ice conversion cycle complete.", ephemeral=True)
 
     # ── /wanted ───────────────────────────────────────────────────────────────

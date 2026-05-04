@@ -1,0 +1,42 @@
+# conan-shop.service
+# ────────────────────
+# systemd service unit for the Conan Exiles Shop bot.
+#
+# Installation (Linux):
+#   1. Copy to /etc/systemd/system/conan-shop.service
+#   2. Edit WorkingDirectory and User below
+#   3. sudo systemctl daemon-reload
+#   4. sudo systemctl enable --now conan-shop
+#
+# Use the watchdog.py launcher (recommended):
+#   ExecStart points to watchdog.py, which supervises the bot process.
+# Or run the bot directly (systemd RestartSec handles restarts):
+#   Replace watchdog.py with "-m bot.main" in ExecStart.
+
+[Unit]
+Description=Conan Exiles Shop Discord Bot
+After=network-online.target mariadb.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=conanbot
+Group=conanbot
+
+# ── Change these paths to match your installation ──────────────────────────
+WorkingDirectory=/home/conanbot/Conan-Exiles-Shop
+Environment=PATH=/home/conanbot/Conan-Exiles-Shop/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+ExecStart=/home/conanbot/Conan-Exiles-Shop/venv/bin/python watchdog.py
+# ────────────────────────────────────────────────────────────────────────────
+
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=conan-shop
+
+# Optional: give the bot a few seconds on SIGTERM before killing
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

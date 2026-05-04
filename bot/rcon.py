@@ -58,3 +58,55 @@ async def teleport_player(conid: str, x: int, y: int, z: int) -> str:
 
 async def broadcast(message: str) -> str:
     return await execute(f"broadcast {message}")
+
+
+# ── Per-server helpers (multi-server support) ──────────────────────────────────
+
+async def execute_for(srv: "ServerContext", command: str) -> str:
+    """Execute an RCON command using per-server credentials."""
+    from bot.config import ServerContext  # noqa: F401 — type reference only
+
+    def _sync() -> str:
+        with RconClient(srv.rcon_host, srv.rcon_port, passwd=srv.rcon_pass) as c:
+            return c.run(command)
+
+    for attempt in range(1, 6):
+        try:
+            result = await asyncio.wait_for(asyncio.to_thread(_sync), timeout=10.0)
+            logger.debug(
+                "RCON[{}] ← {!r}  →  {}", srv.server_name, command, (result or "")[:120]
+            )
+            return result or ""
+        except asyncio.TimeoutError:
+            logger.warning(
+                "RCON[{}] timeout (attempt {}): {!r}", srv.server_name, attempt, command
+            )
+        except Exception as exc:
+            logger.warning(
+                "RCON[{}] error (attempt {}): {}", srv.server_name, attempt, exc
+            )
+        await asyncio.sleep(1)
+
+    raise ConnectionError(
+        f"RCON[{srv.server_name}] failed after 5 attempts: {command!r}"
+    )
+
+
+async def list_players_for(srv) -> str:
+    return await execute_for(srv, "listplayers")
+
+
+async def give_item_for(srv, conid: str, template_id: int, quantity: int) -> str:
+    return await execute_for(srv, f"con {conid} spawnitem {template_id} {quantity}")
+
+
+async def learn_feat_for(srv, conid: str, feat_id: int) -> str:
+    return await execute_for(srv, f"con {conid} LearnFeat {feat_id}")
+
+
+async def teleport_player_for(srv, conid: str, x: int, y: int, z: int) -> str:
+    return await execute_for(srv, f"con {conid} TeleportPlayer {x} {y} {z}")
+
+
+async def broadcast_for(srv, message: str) -> str:
+    return await execute_for(srv, f"broadcast {message}")

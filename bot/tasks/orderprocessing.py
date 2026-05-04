@@ -20,10 +20,10 @@ import aiomysql
 from loguru import logger
 
 from bot import rcon as rcon_client
-from bot.config import settings
+from bot.config import settings, ServerContext
 
 
-async def process_orders(pool: aiomysql.Pool) -> None:
+async def process_orders(pool: aiomysql.Pool, servers_map: dict) -> None:
     try:
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
@@ -54,6 +54,9 @@ async def process_orders(pool: aiomysql.Pool) -> None:
                 await conn.commit()
 
                 sn = server_name or settings.server_name
+                srv = servers_map.get(sn) if servers_map else None
+                if srv is None:
+                    srv = ServerContext.from_settings()
                 conid = None
 
                 # serverBuff targets the server, not a specific player — skip online check
@@ -71,7 +74,7 @@ async def process_orders(pool: aiomysql.Pool) -> None:
 
                 try:
                     if item_type == "knowledge":
-                        await rcon_client.learn_feat(conid, int(item_id))
+                        await rcon_client.learn_feat_for(srv, conid, int(item_id))
                     elif item_type == "serverBuff":
                         # serverBuff has no player target — activate on server (conid=0)
                         # item_id here is the server_buffs.id; fetch the activate command
@@ -85,7 +88,7 @@ async def process_orders(pool: aiomysql.Pool) -> None:
                             await _mark_retry(cur, conn, order_num)
                             return
                         activate_cmd, duration_min = buff
-                        await rcon_client.execute(activate_cmd)
+                        await rcon_client.execute_for(srv, activate_cmd)
                         from datetime import timedelta
                         end_time = datetime.now() + timedelta(minutes=int(duration_min or 60))
                         await cur.execute(
@@ -94,7 +97,7 @@ async def process_orders(pool: aiomysql.Pool) -> None:
                             (datetime.now(), end_time, platform_id, item_id),
                         )
                     else:
-                        await rcon_client.give_item(conid, int(item_id), int(qty))
+                        await rcon_client.give_item_for(srv, conid, int(item_id), int(qty))
                     success = True
                     logger.info(
                         "Delivered order {}: {}× item {} to {} (conid={})",

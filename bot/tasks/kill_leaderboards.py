@@ -24,15 +24,15 @@ import discord
 from discord.ext import commands
 from loguru import logger
 
-from bot.config import settings
+from bot.config import settings, ServerContext
 
 TOP_N = 15
 
 
-async def post_kill_leaderboards(pool: aiomysql.Pool, bot: commands.Bot) -> None:
-    logger.debug("Kill leaderboards running...")
+async def post_kill_leaderboards(pool: aiomysql.Pool, srv: ServerContext, bot: commands.Bot) -> None:
+    logger.debug("Kill leaderboards running [{}]...", srv.server_name)
     try:
-        sn = settings.server_name
+        sn = srv.server_name
         now = datetime.utcnow()
 
         windows = {

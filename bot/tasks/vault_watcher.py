@@ -17,16 +17,16 @@ import discord
 from discord.ext import commands
 from loguru import logger
 
-from bot.config import settings
+from bot.config import settings, ServerContext
 
 
-async def check_vault_expiry(pool: aiomysql.Pool, bot: commands.Bot) -> None:
-    logger.debug("Vault watcher running...")
+async def check_vault_expiry(pool: aiomysql.Pool, srv: ServerContext, bot: commands.Bot) -> None:
+    logger.debug("Vault watcher running [{}]...", srv.server_name)
     try:
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
                 await cur.execute("SET NAMES utf8mb4")
-                sn = settings.server_name
+                sn = srv.server_name
 
                 # Find expired rentals still marked as in-use
                 await cur.execute(

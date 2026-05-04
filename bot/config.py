@@ -6,6 +6,7 @@ Every value is validated at startup — missing required fields raise a clear er
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from functools import lru_cache
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -90,3 +91,69 @@ def get_settings() -> Settings:
 
 
 settings = get_settings()
+
+
+# ── Per-server configuration ────────────────────────────────────────────────────
+@dataclass
+class ServerContext:
+    """Per-server configuration loaded from the ``servers`` table or from .env.
+
+    Global settings (Discord token, DB credentials, shop values, channel IDs)
+    remain in ``Settings``.  ``ServerContext`` holds only the per-instance
+    Conan Exiles server configuration.
+    """
+
+    server_name: str
+    rcon_host: str
+    rcon_port: int
+    rcon_pass: str
+    game_db_path: str
+    game_log_path: str
+    prison_exit_coords: str = "0 0 0"
+    prison_min_x: int = 0
+    prison_min_y: int = 0
+    prison_max_x: int = 0
+    prison_max_y: int = 0
+
+    @property
+    def prison_enabled(self) -> bool:
+        """True when jail bounds have been configured."""
+        return bool(self.prison_max_x or self.prison_max_y)
+
+    @classmethod
+    def from_db_row(cls, row: dict) -> "ServerContext":
+        """Build from a DictCursor row from the ``servers`` table.
+        Any missing/null column falls back to the corresponding .env value.
+        """
+        s = settings
+        return cls(
+            server_name=row["ServerName"],
+            rcon_host=row.get("rcon_host") or s.rcon_host,
+            rcon_port=int(row.get("rcon_port") or s.rcon_port),
+            rcon_pass=row.get("rcon_pass") or s.rcon_pass,
+            game_db_path=row.get("DatabaseLocation") or s.game_db_path,
+            game_log_path=row.get("LogLocation") or s.game_log_path,
+            prison_exit_coords=row.get("Prison_Exit_Coordinates") or s.prison_exit_coords,
+            prison_min_x=int(row.get("prison_min_x") or s.prison_min_x),
+            prison_min_y=int(row.get("prison_min_y") or s.prison_min_y),
+            prison_max_x=int(row.get("prison_max_x") or s.prison_max_x),
+            prison_max_y=int(row.get("prison_max_y") or s.prison_max_y),
+        )
+
+    @classmethod
+    def from_settings(cls) -> "ServerContext":
+        """Build from global .env settings — single-server fallback."""
+        s = settings
+        return cls(
+            server_name=s.server_name,
+            rcon_host=s.rcon_host,
+            rcon_port=s.rcon_port,
+            rcon_pass=s.rcon_pass,
+            game_db_path=s.game_db_path,
+            game_log_path=s.game_log_path,
+            prison_exit_coords=s.prison_exit_coords,
+            prison_min_x=s.prison_min_x,
+            prison_min_y=s.prison_min_y,
+            prison_max_x=s.prison_max_x,
+            prison_max_y=s.prison_max_y,
+        )
