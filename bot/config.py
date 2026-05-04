@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     inventory_tracking_channel_id: int = 0
     wanted_channel_id: int = 0
     vault_rental_channel_id: int = 0
+    server_settings_channel_id: int = 0  # channel for server setting change alerts
 
     # ── Shop ──────────────────────────────────────────────────────────────────
     starting_cash: int = 100
@@ -83,6 +84,10 @@ class Settings(BaseSettings):
 
     # ── Timezone ──────────────────────────────────────────────────────────────
     timezone_offset: int = -6
+
+    # ── Firewall blocklist ────────────────────────────────────────────────────
+    firewall_enabled: bool = False
+    firewall_blocklist_file: str = "blocklist.txt"
 
 
 @lru_cache(maxsize=1)

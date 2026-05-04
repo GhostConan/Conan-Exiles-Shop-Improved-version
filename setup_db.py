@@ -289,6 +289,15 @@ TABLES: list[str] = [
         INDEX idx_pending (platform_id, processed)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     """,
+
+    # ── Server settings snapshot table ────────────────────────────────────────
+    f"""
+    CREATE TABLE IF NOT EXISTS {SN}_server_settings_snapshot (
+        setting_key   VARCHAR(255) PRIMARY KEY,
+        setting_value TEXT,
+        updated_at    DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    """,
 ]
 
 # Seed the servers table with values from .env

@@ -24,9 +24,12 @@ A fully asynchronous Discord bot for Conan Exiles dedicated servers. Combines an
 16. [Jail System](#jail-system)
 17. [Multi-Server Support](#multi-server-support)
 18. [Watchdog (Process Supervisor)](#watchdog-process-supervisor)
-19. [Adjusting Log Regexes](#adjusting-log-regexes)
-20. [Troubleshooting](#troubleshooting)
-21. [Tech Stack](#tech-stack)
+19. [RCON Health Monitoring](#rcon-health-monitoring)
+20. [Server Settings Watcher](#server-settings-watcher)
+21. [Firewall Blocklist](#firewall-blocklist)
+22. [Adjusting Log Regexes](#adjusting-log-regexes)
+23. [Troubleshooting](#troubleshooting)
+24. [Tech Stack](#tech-stack)
 
 ---
 
@@ -48,6 +51,9 @@ A fully asynchronous Discord bot for Conan Exiles dedicated servers. Combines an
 - Teleporter task — processes queued teleports from jail releases and admin commands
 - External watchdog (watchdog.py) — auto-restarts the bot on crash with scheduled periodic restarts
 - systemd service file (conan-shop.service) included for Linux deployments
+- RCON health monitoring — detects connection failures and fast-fails tasks during outages, auto-recovers when RCON responds
+- Server settings watcher — monitors game.db for setting changes and posts Discord alerts
+- Firewall blocklist management — block/unblock IPs via netsh (Windows) or iptables (Linux)
 - Admin commands for currency, items, teleport, broadcast, and moderation
 
 ---
@@ -354,6 +360,8 @@ These commands require the Admin or Moderator Discord role configured in `.env`.
 | `/processblackice` | Manually triggers the Black Ice to Hardened Brick conversion cycle. |
 | `/wanted [player_name]` | Marks a player as wanted (level 3), or shows the current wanted list if no name is given. |
 | `/bounty <player_name> <amount>` | Sets a coin bounty on a player. |
+| `/addblock <ip_address>` | Adds an IP address or CIDR range to the firewall blocklist. Requires `FIREWALL_ENABLED=true`. |
+| `/removeblock <ip_address>` | Removes an IP address or CIDR range from the firewall blocklist. |
 
 ---
 
@@ -374,6 +382,8 @@ The following tasks run automatically on a fixed schedule:
 | Building leaderboard | Every 1 minute | Posts building piece and inventory count leaderboards to Discord. |
 | Kill leaderboards | Every 10 minutes | Posts solo and clan kill leaderboards across all four time windows. |
 | Wanted watcher | Every 30 minutes | Degrades wanted levels for inactive players. Cleans up old PVP position data. |
+| Server settings watcher | Every 5 minutes | Reads game.db for server setting changes and posts Discord alerts when values differ from the last snapshot. |
+| Firewall sync | Every 1 minute | Syncs the blocklist file with active firewall rules. Only runs when `FIREWALL_ENABLED=true`. |
 | Log watcher | Continuous | Tails the Conan server log for kills, Black Ice drops, and in-game chat commands. |
 
 All per-server tasks run independently for each server in the `servers` table. Adding a new server row automatically starts its own task set on next bot restart.
@@ -562,7 +572,58 @@ sudo journalctl -u conan-shop -f
 
 ---
 
-## Adjusting Log Regexes
+## RCON Health Monitoring
+
+The bot tracks RCON connectivity per server. If a server's RCON fails 5 consecutive times, it is marked unhealthy. While unhealthy:
+
+- All RCON-dependent tasks (payroll, usersync, teleporter, etc.) fail immediately instead of retrying for up to 50 seconds, keeping the task scheduler responsive.
+- The bot continues attempting the connection on each task cycle with a reduced timeout.
+- As soon as any RCON command succeeds, the server is marked healthy again and normal retry behavior resumes.
+- Status changes are logged at ERROR level (unhealthy) and INFO level (recovered).
+
+No configuration is required. This behavior is always active.
+
+---
+
+## Server Settings Watcher
+
+The server settings watcher reads the `properties` table from `game.db` every 5 minutes and compares it to a stored snapshot in the `{SN}_server_settings_snapshot` MariaDB table.
+
+On first run it builds the baseline snapshot without posting any alerts. On subsequent runs, any key whose value differs from the snapshot is included in a Discord embed posted to the `SERVER_SETTINGS_CHANNEL_ID` channel.
+
+To enable Discord notifications, set in `.env`:
+```
+SERVER_SETTINGS_CHANNEL_ID=<your_discord_channel_id>
+```
+
+If the `properties` table does not exist in `game.db`, the watcher looks for any 2-column table whose name contains "setting", "config", or "propert".
+
+---
+
+## Firewall Blocklist
+
+The firewall module allows admins to block IP addresses at the OS level directly from Discord.
+
+Enable in `.env`:
+```
+FIREWALL_ENABLED=true
+FIREWALL_BLOCKLIST_FILE=blocklist.txt
+```
+
+The blocklist file contains one IP address or CIDR range per line. Lines starting with `#` are treated as comments.
+
+The firewall sync task runs every minute and ensures the active firewall rules match the file contents. Rules are applied using `netsh advfirewall` on Windows and `iptables` on Linux.
+
+Admin commands:
+
+- `/addblock <ip_address>` — Blocks the IP immediately and adds it to the blocklist file.
+- `/removeblock <ip_address>` — Unblocks the IP immediately and removes it from the file.
+
+Note: On Linux, `iptables` rules are not persistent across reboots by default. Install `iptables-persistent` to persist them, or rely on the bot applying rules on startup via the scheduled sync task.
+
+---
+
+
 
 The log watcher uses regular expressions to detect events. If your server version or mods produce a different log format, open `bot/tasks/game_log_watcher.py` and adjust the relevant pattern.
 
