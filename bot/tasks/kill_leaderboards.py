@@ -131,6 +131,8 @@ def _solo_embed(rows: list, window: str) -> discord.Embed:
         lines.append(f"{rank:<4} {name or 'Unknown':<30} {kills:>5} kills")
     embed.description = f"```\n{'Rank':<4} {'Player':<30} {'Kills':>5}\n{'-'*42}\n" + "\n".join(lines) + "\n```"
     embed.timestamp = datetime.utcnow()
+    if settings.map_url:
+        embed.add_field(name="Server Map", value=f"[View Map]({settings.map_url})", inline=False)
     return embed
 
 
@@ -148,6 +150,8 @@ def _clan_embed(rows: list, window: str) -> discord.Embed:
         lines.append(f"{rank:<4} {clan:<30} {kills:>5} kills")
     embed.description = f"```\n{'Rank':<4} {'Clan':<30} {'Kills':>5}\n{'-'*42}\n" + "\n".join(lines) + "\n```"
     embed.timestamp = datetime.utcnow()
+    if settings.map_url:
+        embed.add_field(name="Server Map", value=f"[View Map]({settings.map_url})", inline=False)
     return embed
 
 

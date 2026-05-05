@@ -108,6 +108,10 @@ def _build_leaderboard_embed(
         lines.append(f"{prefix} **{name or 'Unknown'}** — {count:,} {col_label}")
 
     embed.description = "\n".join(lines) or "No data yet."
+
+    if settings.map_url:
+        embed.add_field(name="Server Map", value=f"[View Map]({settings.map_url})", inline=False)
+
     return embed
 
 

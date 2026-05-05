@@ -56,6 +56,10 @@ class Settings(BaseSettings):
     vault_rental_channel_id: int = 0
     server_settings_channel_id: int = 0  # channel for server setting change alerts
 
+    # ── Map URL (optional) ────────────────────────────────────────────────────
+    # If set, a link to your server map is added to leaderboard embeds.
+    map_url: str = ""
+
     # ── Shop ──────────────────────────────────────────────────────────────────
     starting_cash: int = 100
     paycheck: int = 50
@@ -81,6 +85,8 @@ class Settings(BaseSettings):
     mod_role: str = "Moderator"
     vip1_role: str = "VIP1"
     vip2_role: str = "VIP2"
+    vip3_role: str = "VIP3"
+    vip4_role: str = "VIP4"
 
     # ── Timezone ──────────────────────────────────────────────────────────────
     timezone_offset: int = -6
