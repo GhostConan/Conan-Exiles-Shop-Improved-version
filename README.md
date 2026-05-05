@@ -227,6 +227,13 @@ Set any channel to `0` to disable that feature's Discord notifications.
 | MOD_ROLE | Moderator | Discord role name with moderator access |
 | VIP1_ROLE | VIP1 | First VIP tier role name |
 | VIP2_ROLE | VIP2 | Second VIP tier role name |
+| VIP3_ROLE | VIP3 | Third VIP tier role name |
+| VIP4_ROLE | VIP4 | Fourth VIP tier role name |
+| TIMEZONE_OFFSET | -6 | UTC offset in hours to match your server log timestamps |
+| MAP_URL | (empty) | Optional URL to your interactive server map. If set, a link is added to all leaderboard Discord embeds. |
+| SERVER_SETTINGS_CHANNEL_ID | 0 | Channel for server settings change alerts |
+| FIREWALL_ENABLED | false | Enable OS-level IP blocking via /addblock and /removeblock |
+| FIREWALL_BLOCKLIST_FILE | blocklist.txt | Path to the IP blocklist file |
 
 ---
 
