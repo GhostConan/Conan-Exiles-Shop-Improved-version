@@ -47,9 +47,13 @@ async def post_kill_leaderboards(pool: aiomysql.Pool, srv: ServerContext, bot: c
             "all": (None,                       settings.solo_lb_all_channel_id, settings.clan_lb_all_channel_id),
         }
 
-        # Cache the platformid -> clan_name map once per cycle (one game.db read
-        # instead of one per window).
-        pid_to_clan = await _load_clan_map(srv.game_db_path)
+        # Cache the platformid -> clan_name + char_name -> clan_name maps once
+        # per cycle. Both are needed because killer_platformid may be empty in
+        # older kill_log rows (it gets populated from currentusers, which is
+        # synced every 5 min — kills that happen before the first sync have no
+        # platformid attached). Falling back to char_name lets us still credit
+        # those kills to the right clan.
+        pid_to_clan, name_to_clan = await _load_clan_maps(srv.game_db_path)
 
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
@@ -69,7 +73,7 @@ async def post_kill_leaderboards(pool: aiomysql.Pool, srv: ServerContext, bot: c
                             )
 
                     if clan_chan_id:
-                        rows = await _fetch_clan(cur, sn, since, pid_to_clan)
+                        rows = await _fetch_clan(cur, sn, since, pid_to_clan, name_to_clan)
                         embed = _clan_embed(rows, label)
                         chan = bot.get_channel(clan_chan_id)
                         if chan:
@@ -84,32 +88,37 @@ async def post_kill_leaderboards(pool: aiomysql.Pool, srv: ServerContext, bot: c
         logger.error("Kill leaderboard error: {}", exc, exc_info=True)
 
 
-async def _load_clan_map(game_db_path: str) -> dict[str, str]:
-    """Return {platform_id: clan_name} for every character currently in a clan.
+async def _load_clan_maps(game_db_path: str) -> tuple[dict[str, str], dict[str, str]]:
+    """Return (platform_id -> clan_name, char_name -> clan_name) for every
+    character currently in a clan.
 
-    Conan stores clan membership on the character row (characters.guild ->
-    guilds.guildId). A platform id may map to multiple characters; the last
-    one wins, which is fine for leaderboards.
+    Conan stores clan membership on the character row
+    (characters.guild -> guilds.guildId). Returning both indexes lets the
+    aggregator match by whichever field the kill_log row actually has.
     """
-    mapping: dict[str, str] = {}
+    pid_map: dict[str, str] = {}
+    name_map: dict[str, str] = {}
     try:
         async with aiosqlite.connect(
             f"file:{game_db_path}?mode=ro", uri=True
         ) as game_db:
             game_db.row_factory = aiosqlite.Row
             async with game_db.execute(
-                "SELECT a.user AS pid, gu.name AS clan "
+                "SELECT a.user AS pid, c.char_name AS name, gu.name AS clan "
                 "FROM characters c "
                 "JOIN account a ON a.id = c.playerid "
                 "JOIN guilds gu ON gu.guildId = c.guild "
                 "WHERE c.guild IS NOT NULL AND c.guild > 0"
             ) as rows:
                 async for row in rows:
-                    if row["pid"] and row["clan"]:
-                        mapping[row["pid"]] = row["clan"]
+                    if row["clan"]:
+                        if row["pid"]:
+                            pid_map[row["pid"]] = row["clan"]
+                        if row["name"]:
+                            name_map[row["name"]] = row["clan"]
     except Exception as exc:
-        logger.warning("Could not load clan map from game.db: {}", exc)
-    return mapping
+        logger.warning("Could not load clan maps from game.db: {}", exc)
+    return pid_map, name_map
 
 
 async def _fetch_solo(cur, sn: str, since) -> list:
@@ -132,31 +141,40 @@ async def _fetch_solo(cur, sn: str, since) -> list:
     return list(await cur.fetchall())
 
 
-async def _fetch_clan(cur, sn: str, since, pid_to_clan: dict[str, str]) -> list:
-    """Aggregate kills by clan using the live game.db clan map."""
-    if not pid_to_clan:
+async def _fetch_clan(
+    cur, sn: str, since, pid_to_clan: dict[str, str], name_to_clan: dict[str, str]
+) -> list:
+    """Aggregate kills by clan using the live game.db clan map.
+
+    Tries killer_platformid first (authoritative), then falls back to
+    killer_name. The fallback is important because killer_platformid is
+    populated from {sn}_currentusers at kill-time, which is only synced
+    every 5 minutes — kills that occur before usersync has run for that
+    player will have an empty platformid.
+    """
+    if not pid_to_clan and not name_to_clan:
         return []
 
     if since:
         await cur.execute(
-            f"SELECT killer_platformid, COUNT(*) AS kills "
+            f"SELECT killer_name, killer_platformid, COUNT(*) AS kills "
             f"FROM {sn}_kill_log "
-            "WHERE kill_time >= %s AND killer_platformid <> '' "
-            "GROUP BY killer_platformid",
+            "WHERE kill_time >= %s AND killer_name <> '' "
+            "GROUP BY killer_name, killer_platformid",
             (since,),
         )
     else:
         await cur.execute(
-            f"SELECT killer_platformid, COUNT(*) AS kills "
+            f"SELECT killer_name, killer_platformid, COUNT(*) AS kills "
             f"FROM {sn}_kill_log "
-            "WHERE killer_platformid <> '' "
-            "GROUP BY killer_platformid"
+            "WHERE killer_name <> '' "
+            "GROUP BY killer_name, killer_platformid"
         )
     rows = await cur.fetchall()
 
     clan_totals: dict[str, int] = {}
-    for pid, kills in rows:
-        clan = pid_to_clan.get(pid)
+    for name, pid, kills in rows:
+        clan = (pid_to_clan.get(pid) if pid else None) or name_to_clan.get(name)
         if not clan:
             continue
         clan_totals[clan] = clan_totals.get(clan, 0) + int(kills)

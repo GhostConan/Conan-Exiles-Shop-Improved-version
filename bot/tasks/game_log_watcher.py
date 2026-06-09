@@ -183,6 +183,39 @@ async def _handle_kill(
                 if row:
                     victim_platformid = row[0]
 
+                # Fallback: if currentusers didn't have one of them (usersync
+                # hasn't run yet for that session, or they logged out before
+                # the next 5-min sync), look them up directly in game.db so
+                # the kill row keeps proper platformid attribution. Without
+                # this, clan/wanted/kill-streak features misattribute kills.
+                if not killer_platformid or not victim_platformid:
+                    try:
+                        async with aiosqlite.connect(
+                            f"file:{srv.game_db_path}?mode=ro", uri=True
+                        ) as game_db:
+                            game_db.row_factory = aiosqlite.Row
+                            for need_name, set_attr in (
+                                (killer if not killer_platformid else None, "killer"),
+                                (victim if not victim_platformid else None, "victim"),
+                            ):
+                                if not need_name:
+                                    continue
+                                async with game_db.execute(
+                                    "SELECT a.user AS pid "
+                                    "FROM characters c "
+                                    "JOIN account a ON a.id = c.playerid "
+                                    "WHERE c.char_name = ? LIMIT 1",
+                                    (need_name,),
+                                ) as rows:
+                                    r = await rows.fetchone()
+                                if r and r["pid"]:
+                                    if set_attr == "killer":
+                                        killer_platformid = r["pid"]
+                                    else:
+                                        victim_platformid = r["pid"]
+                    except Exception as exc:
+                        logger.debug("Kill platformid fallback failed: {}", exc)
+
                 await cur.execute(
                     f"INSERT INTO {sn}_kill_log "
                     "(killer_name, killer_platformid, victim_name, victim_platformid, kill_x, kill_y, kill_time) "
