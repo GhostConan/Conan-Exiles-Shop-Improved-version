@@ -67,7 +67,10 @@ async def execute(command: str) -> str:
 
     def _sync() -> str:
         with RconClient(settings.rcon_host, settings.rcon_port, passwd=settings.rcon_pass) as c:
-            return c.run(command)
+            # enforce_id=False tolerates Conan's broadcast-mode RCON which echoes
+            # packets that do not match the request id (raises SessionTimeout
+            # "packet ID mismatch" otherwise).
+            return c.run(command, enforce_id=False)
 
     for attempt in range(1, 6):
         try:
@@ -122,7 +125,10 @@ async def execute_for(srv: "ServerContext", command: str) -> str:
 
     def _sync() -> str:
         with RconClient(srv.rcon_host, srv.rcon_port, passwd=srv.rcon_pass) as c:
-            return c.run(command)
+            # enforce_id=False — see note in execute(). Conan's broadcast-mode RCON
+            # interleaves packets with mismatched ids; rcon library raises
+            # SessionTimeout otherwise.
+            return c.run(command, enforce_id=False)
 
     for attempt in range(1, max_attempts + 1):
         try:

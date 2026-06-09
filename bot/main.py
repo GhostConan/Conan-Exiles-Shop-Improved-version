@@ -86,6 +86,7 @@ async def main() -> None:
     from bot.tasks.usersync import sync_players
     from bot.tasks.orderprocessing import process_orders
     from bot.tasks.black_ice_converter import convert_black_ice
+    from bot.tasks.inventory_watcher import watch_inventory
     from bot.tasks.game_db_watcher import watch_game_db
     from bot.tasks.game_log_watcher import game_log_watcher
     from bot.tasks.serverbuff_watcher import check_server_buffs
@@ -130,6 +131,10 @@ async def main() -> None:
             convert_black_ice, "interval",
             seconds=settings.black_ice_check_interval_seconds,
             args=[pool, srv], id=f"blackice_{sn}", misfire_grace_time=60,
+        )
+        scheduler.add_job(
+            watch_inventory, "interval", seconds=60,
+            args=[pool, srv], id=f"invwatch_{sn}", misfire_grace_time=60,
         )
         scheduler.add_job(
             process_teleports, "interval", seconds=2,
