@@ -296,10 +296,12 @@ async def _handle_black_ice_drop(
 async def _handle_chat(
     pool: aiomysql.Pool, bot: commands.Bot, srv: ServerContext, char_name: str, message: str
 ) -> None:
-    m = RE_BLACKICE_CMD.match(message)
-    if m:
-        await _process_blackice_claim(pool, srv, char_name, int(m.group(1)))
-        return
+    # Note: the !blackice manual claim is deliberately NOT dispatched here.
+    # The inventory_watcher task is the authoritative path for Black Ice
+    # crediting (reads game.db inventory deltas, can't be cheated). Allowing
+    # players to type !blackice <N> would let them claim arbitrary amounts.
+    # The handler function is kept in place so operators can re-enable it
+    # for legacy setups that don't run inventory_watcher.
 
     m = RE_REGISTER_CMD.match(message)
     if m:
