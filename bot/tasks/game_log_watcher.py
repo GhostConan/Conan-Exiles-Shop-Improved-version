@@ -34,16 +34,37 @@ from bot.config import settings, ServerContext
 # ── Regex patterns ────────────────────────────────────────────────────────────
 
 RE_TIMESTAMP = re.compile(r"\[(\d{4}\.\d{2}\.\d{2}-\d{2}\.\d{2}\.\d{2}:\d+)\]")
-RE_CHAT = re.compile(r"Character '([^']+)' said:\s*(.+)")
+# Conan's ChatWindow log line looks like:
+#   ChatWindow: Character <name> (uid <N>, player <N>) said: <msg>
+# Older/modded servers may emit:
+#   Character '<name>' said: <msg>
+# This pattern accepts both.
+RE_CHAT = re.compile(
+    r"Character\s+'?([^'\s(]+)'?\s*(?:\([^)]*\))?\s+said:\s*(.+)"
+)
 RE_BLACK_ICE_DROP = re.compile(
     r"(?P<char>.+?)\s+dropped\s+Black\s*Ice\s+(?:amount:|x)(?P<amount>\d+)",
     re.IGNORECASE,
 )
+# Vanilla Conan death log format:
+#   ConanSandbox: Warning: KillCharacterWithRagdoll_Implementation.
+#   KillerNameInput: <killer> CauseOfDeath: <cause>. IsThrall: <0|1>
+#   Name: <internal_bp_name> CharacterName: <victim>
+# The old "<victim> was killed by <killer>" format is no longer emitted.
 RE_KILL = re.compile(
-    r"'(?P<victim>[^']+)'\s+was\s+killed\s+by\s+'?(?P<killer>[^'\[]+?)'?\s*(?:\[|$)",
+    r"KillCharacterWithRagdoll_Implementation\.\s+"
+    r"KillerNameInput:\s*(?P<killer>.*?)\s+"
+    r"CauseOfDeath:\s*(?P<cause>\S+?)\.\s+"
+    r"IsThrall:\s*(?P<isthrall>\d+)\s+"
+    r"Name:\s*(?P<internal>\S+)\s+"
+    r"CharacterName:\s*(?P<victim>.+?)\s*$",
     re.IGNORECASE,
 )
 RE_REGISTER_CMD = re.compile(r"^!register\s+([A-Z0-9]{6,12})$", re.IGNORECASE)
+# Manual claim fallback for environments that do not run the inventory_watcher
+# (e.g. servers with very long ServerSaveInterval). When the watcher is active
+# players have no need to type this command.
+RE_BLACKICE_CMD = re.compile(r"^!blackice\s+(\d+)$", re.IGNORECASE)
 
 
 def _parse_log_time(raw: str) -> datetime:
@@ -108,7 +129,17 @@ async def _process_line(
 
     m = RE_KILL.search(line)
     if m:
-        await _handle_kill(bot, m.group("killer").strip(), m.group("victim").strip(), pool, srv)
+        killer = m.group("killer").strip()
+        victim = m.group("victim").strip()
+        internal = m.group("internal")
+        # Skip wildlife / NPC-vs-NPC noise (otherwise the kill feed channel is
+        # flooded with "Vulture was killed by Spider" every few seconds). Only
+        # forward kills where the victim is a player character.
+        if internal.startswith("BP_NPC_") or internal.startswith("BP_Wildlife_"):
+            return
+        if not killer or killer.lower() in ("self destructing", "none"):
+            killer = "Environment"
+        await _handle_kill(bot, killer, victim, pool, srv)
         return
 
     m = RE_CHAT.search(line)
@@ -232,6 +263,11 @@ async def _handle_black_ice_drop(
 async def _handle_chat(
     pool: aiomysql.Pool, srv: ServerContext, char_name: str, message: str
 ) -> None:
+    m = RE_BLACKICE_CMD.match(message)
+    if m:
+        await _process_blackice_claim(pool, srv, char_name, int(m.group(1)))
+        return
+
     m = RE_REGISTER_CMD.match(message)
     if m:
         await _process_registration(pool, srv, char_name, m.group(1).upper())
@@ -297,3 +333,38 @@ async def _process_registration(
         logger.error(
             "_process_registration error for '{}' code {}: {}", char_name, code, exc
         )
+
+
+async def _process_blackice_claim(
+    pool: aiomysql.Pool, srv: ServerContext, char_name: str, amount: int
+) -> None:
+    """Resolve char_name -> platform_id via game.db and record a Black Ice drop.
+
+    Manual fallback when the inventory_watcher is not running. The watcher
+    is the authoritative path; this command is kept for legacy setups.
+    """
+    if amount <= 0:
+        return
+    try:
+        async with aiosqlite.connect(
+            f"file:{srv.game_db_path}?mode=ro", uri=True
+        ) as game_db:
+            game_db.row_factory = aiosqlite.Row
+            async with game_db.execute(
+                "SELECT a.user AS platform_id "
+                "FROM characters c JOIN account a ON a.id = c.playerid "
+                "WHERE c.char_name = ? AND a.online = 1 LIMIT 1",
+                (char_name,),
+            ) as rows:
+                row = await rows.fetchone()
+        if not row:
+            logger.warning("!blackice: '{}' not online / not found in game.db", char_name)
+            return
+        from bot.tasks.black_ice_converter import record_black_ice_drop
+        await record_black_ice_drop(pool, srv, row["platform_id"], amount)
+        logger.info(
+            "!blackice: {} claimed {} Black Ice [{}]",
+            char_name, amount, srv.server_name,
+        )
+    except Exception as exc:
+        logger.error("_process_blackice_claim error for '{}': {}", char_name, exc)

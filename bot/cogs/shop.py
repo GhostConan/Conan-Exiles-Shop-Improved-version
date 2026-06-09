@@ -174,6 +174,11 @@ class ShopCog(commands.Cog, name="Shop"):
 
                 order_num = str(uuid.uuid4())[:16]
                 now = datetime.now()
+                # Setting last_attempt to a far-past date so the order processor
+                # (which skips orders attempted in the last 5 minutes) picks the
+                # new order up on its very next 5-second cycle instead of waiting
+                # the full retry window.
+                queued_attempt = datetime(2000, 1, 1)
                 target_server = server_name or last_server or settings.server_name
 
                 await cur.execute(
@@ -181,7 +186,7 @@ class ShopCog(commands.Cog, name="Shop"):
                     "(order_number, itemid, itemType, itemcount, purchaser_platformid, "
                     "order_date, completed, in_process, refunded, last_attempt, serverName) "
                     "VALUES (%s, %s, %s, %s, %s, %s, FALSE, FALSE, FALSE, %s, %s)",
-                    (order_num, item_id, item_type, quantity, platform_id, now, now, target_server),
+                    (order_num, item_id, item_type, quantity, platform_id, now, queued_attempt, target_server),
                 )
                 await cur.execute(
                     "INSERT INTO shop_log "
