@@ -34,16 +34,37 @@ from bot.config import settings, ServerContext
 # ── Regex patterns ────────────────────────────────────────────────────────────
 
 RE_TIMESTAMP = re.compile(r"\[(\d{4}\.\d{2}\.\d{2}-\d{2}\.\d{2}\.\d{2}:\d+)\]")
-RE_CHAT = re.compile(r"Character '([^']+)' said:\s*(.+)")
+# Conan's ChatWindow log line looks like:
+#   ChatWindow: Character <name> (uid <N>, player <N>) said: <msg>
+# Older/modded servers may emit:
+#   Character '<name>' said: <msg>
+# This pattern accepts both.
+RE_CHAT = re.compile(
+    r"Character\s+'?([^'\s(]+)'?\s*(?:\([^)]*\))?\s+said:\s*(.+)"
+)
 RE_BLACK_ICE_DROP = re.compile(
     r"(?P<char>.+?)\s+dropped\s+Black\s*Ice\s+(?:amount:|x)(?P<amount>\d+)",
     re.IGNORECASE,
 )
+# Vanilla Conan death log format:
+#   ConanSandbox: Warning: KillCharacterWithRagdoll_Implementation.
+#   KillerNameInput: <killer> CauseOfDeath: <cause>. IsThrall: <0|1>
+#   Name: <internal_bp_name> CharacterName: <victim>
+# The old "<victim> was killed by <killer>" format is no longer emitted.
 RE_KILL = re.compile(
-    r"'(?P<victim>[^']+)'\s+was\s+killed\s+by\s+'?(?P<killer>[^'\[]+?)'?\s*(?:\[|$)",
+    r"KillCharacterWithRagdoll_Implementation\.\s+"
+    r"KillerNameInput:\s*(?P<killer>.*?)\s+"
+    r"CauseOfDeath:\s*(?P<cause>\S+?)\.\s+"
+    r"IsThrall:\s*(?P<isthrall>\d+)\s+"
+    r"Name:\s*(?P<internal>\S+)\s+"
+    r"CharacterName:\s*(?P<victim>.+?)\s*$",
     re.IGNORECASE,
 )
 RE_REGISTER_CMD = re.compile(r"^!register\s+([A-Z0-9]{6,12})$", re.IGNORECASE)
+# Manual claim fallback for environments that do not run the inventory_watcher
+# (e.g. servers with very long ServerSaveInterval). When the watcher is active
+# players have no need to type this command.
+RE_BLACKICE_CMD = re.compile(r"^!blackice\s+(\d+)$", re.IGNORECASE)
 
 
 def _parse_log_time(raw: str) -> datetime:
@@ -108,12 +129,22 @@ async def _process_line(
 
     m = RE_KILL.search(line)
     if m:
-        await _handle_kill(bot, m.group("killer").strip(), m.group("victim").strip(), pool, srv)
+        killer = m.group("killer").strip()
+        victim = m.group("victim").strip()
+        internal = m.group("internal")
+        # Skip wildlife / NPC-vs-NPC noise (otherwise the kill feed channel is
+        # flooded with "Vulture was killed by Spider" every few seconds). Only
+        # forward kills where the victim is a player character.
+        if internal.startswith("BP_NPC_") or internal.startswith("BP_Wildlife_"):
+            return
+        if not killer or killer.lower() in ("self destructing", "none"):
+            killer = "Environment"
+        await _handle_kill(bot, killer, victim, pool, srv)
         return
 
     m = RE_CHAT.search(line)
     if m:
-        await _handle_chat(pool, srv, m.group(1), m.group(2).strip())
+        await _handle_chat(pool, bot, srv, m.group(1), m.group(2).strip())
         return
 
 
@@ -151,6 +182,39 @@ async def _handle_kill(
                 row = await cur.fetchone()
                 if row:
                     victim_platformid = row[0]
+
+                # Fallback: if currentusers didn't have one of them (usersync
+                # hasn't run yet for that session, or they logged out before
+                # the next 5-min sync), look them up directly in game.db so
+                # the kill row keeps proper platformid attribution. Without
+                # this, clan/wanted/kill-streak features misattribute kills.
+                if not killer_platformid or not victim_platformid:
+                    try:
+                        async with aiosqlite.connect(
+                            f"file:{srv.game_db_path}?mode=ro", uri=True
+                        ) as game_db:
+                            game_db.row_factory = aiosqlite.Row
+                            for need_name, set_attr in (
+                                (killer if not killer_platformid else None, "killer"),
+                                (victim if not victim_platformid else None, "victim"),
+                            ):
+                                if not need_name:
+                                    continue
+                                async with game_db.execute(
+                                    "SELECT a.user AS pid "
+                                    "FROM characters c "
+                                    "JOIN account a ON a.id = c.playerid "
+                                    "WHERE c.char_name = ? LIMIT 1",
+                                    (need_name,),
+                                ) as rows:
+                                    r = await rows.fetchone()
+                                if r and r["pid"]:
+                                    if set_attr == "killer":
+                                        killer_platformid = r["pid"]
+                                    else:
+                                        victim_platformid = r["pid"]
+                    except Exception as exc:
+                        logger.debug("Kill platformid fallback failed: {}", exc)
 
                 await cur.execute(
                     f"INSERT INTO {sn}_kill_log "
@@ -230,17 +294,30 @@ async def _handle_black_ice_drop(
 
 
 async def _handle_chat(
-    pool: aiomysql.Pool, srv: ServerContext, char_name: str, message: str
+    pool: aiomysql.Pool, bot: commands.Bot, srv: ServerContext, char_name: str, message: str
 ) -> None:
+    # Note: the !blackice manual claim is deliberately NOT dispatched here.
+    # The inventory_watcher task is the authoritative path for Black Ice
+    # crediting (reads game.db inventory deltas, can't be cheated). Allowing
+    # players to type !blackice <N> would let them claim arbitrary amounts.
+    # The handler function is kept in place so operators can re-enable it
+    # for legacy setups that don't run inventory_watcher.
+
     m = RE_REGISTER_CMD.match(message)
     if m:
-        await _process_registration(pool, srv, char_name, m.group(1).upper())
+        await _process_registration(pool, bot, srv, char_name, m.group(1).upper())
 
 
 async def _process_registration(
-    pool: aiomysql.Pool, srv: ServerContext, char_name: str, code: str
+    pool: aiomysql.Pool, bot: commands.Bot, srv: ServerContext, char_name: str, code: str
 ) -> None:
-    """Complete the Discord ↔ Conan account link using the registration code."""
+    """Complete the Discord ↔ Conan account link using the registration code.
+
+    On success an account row is created if one does not already exist (the
+    previous UPDATE-only path silently failed for users whose account had not
+    yet been seeded by usersync), and a confirmation DM is sent to the user.
+    If the DM is blocked, a fallback notice goes to the serverlog channel.
+    """
     try:
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
@@ -279,9 +356,17 @@ async def _process_registration(
 
                 platform_id = row["platform_id"]
 
+                # Seed an accounts row if usersync hasn't created one yet,
+                # otherwise the UPDATE below updates zero rows and the link
+                # silently fails.
                 await cur.execute(
-                    "UPDATE accounts SET discordid = %s WHERE conanplatformid = %s",
-                    (discord_id, platform_id),
+                    "INSERT INTO accounts (conanplatformid, conanplayer, discordid, "
+                    "walletbalance, lastServer) "
+                    "VALUES (%s, %s, %s, 0, %s) "
+                    "ON DUPLICATE KEY UPDATE discordid = VALUES(discordid), "
+                    "conanplayer = VALUES(conanplayer), "
+                    "lastServer = VALUES(lastServer)",
+                    (platform_id, char_name, discord_id, srv.server_name),
                 )
                 await cur.execute(
                     "DELETE FROM registration_codes WHERE registrationcode = %s", (code,)
@@ -293,7 +378,80 @@ async def _process_registration(
                     char_name, platform_id, discord_id, srv.server_name,
                 )
 
+        await _notify_registration_success(bot, discord_id, char_name, srv.server_name)
+
     except Exception as exc:
         logger.error(
             "_process_registration error for '{}' code {}: {}", char_name, code, exc
         )
+
+
+async def _notify_registration_success(
+    bot: commands.Bot, discord_id: str | int, char_name: str, server_name: str
+) -> None:
+    """DM the user to confirm registration; fall back to the serverlog channel."""
+    embed = discord.Embed(
+        title="✅ Registration successful",
+        description=(
+            f"Your Discord account is now linked to **{char_name}** on **{server_name}**.\n"
+            f"Use `/balance` to check your coins and `/shop` to browse items."
+        ),
+        colour=discord.Colour.green(),
+    )
+    embed.timestamp = datetime.utcnow()
+
+    try:
+        user = bot.get_user(int(discord_id)) or await bot.fetch_user(int(discord_id))
+        await user.send(embed=embed)
+        logger.info("Sent registration DM to Discord ID {}", discord_id)
+        return
+    except discord.Forbidden:
+        logger.info("Registration DM blocked by user {} — posting to serverlog", discord_id)
+    except Exception as exc:
+        logger.warning("Could not DM registration confirmation to {}: {}", discord_id, exc)
+
+    if settings.serverlog_channel_id:
+        chan = bot.get_channel(settings.serverlog_channel_id)
+        if chan:
+            try:
+                await chan.send(
+                    content=f"<@{discord_id}>",
+                    embed=embed,
+                )
+            except Exception as exc:
+                logger.warning("Could not post registration notice to serverlog: {}", exc)
+
+
+async def _process_blackice_claim(
+    pool: aiomysql.Pool, srv: ServerContext, char_name: str, amount: int
+) -> None:
+    """Resolve char_name -> platform_id via game.db and record a Black Ice drop.
+
+    Manual fallback when the inventory_watcher is not running. The watcher
+    is the authoritative path; this command is kept for legacy setups.
+    """
+    if amount <= 0:
+        return
+    try:
+        async with aiosqlite.connect(
+            f"file:{srv.game_db_path}?mode=ro", uri=True
+        ) as game_db:
+            game_db.row_factory = aiosqlite.Row
+            async with game_db.execute(
+                "SELECT a.user AS platform_id "
+                "FROM characters c JOIN account a ON a.id = c.playerid "
+                "WHERE c.char_name = ? AND a.online = 1 LIMIT 1",
+                (char_name,),
+            ) as rows:
+                row = await rows.fetchone()
+        if not row:
+            logger.warning("!blackice: '{}' not online / not found in game.db", char_name)
+            return
+        from bot.tasks.black_ice_converter import record_black_ice_drop
+        await record_black_ice_drop(pool, srv, row["platform_id"], amount)
+        logger.info(
+            "!blackice: {} claimed {} Black Ice [{}]",
+            char_name, amount, srv.server_name,
+        )
+    except Exception as exc:
+        logger.error("_process_blackice_claim error for '{}': {}", char_name, exc)
