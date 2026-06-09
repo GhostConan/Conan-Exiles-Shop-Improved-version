@@ -10,6 +10,16 @@ This makes Black Ice claims fully automatic and tamper-proof: players just
 drop / despawn the items in-game and the bot credits them on the next cycle.
 No chat command needed (the !blackice command remains as a fallback only).
 
+How Conan stores stack counts
+─────────────────────────────
+Each row in item_inventory is one item slot. The binary `data` BLOB stores
+a UE4 property table whose layout (observed on current builds) is:
+
+    ... 79 46 00 00 | prop_count:u32 | (type:u32, value:u32) × prop_count ...
+
+Stack count is the property whose type_id == 0x01. When a slot holds a
+single item, that property is omitted and the stack count is 1.
+
 Caveats
 ───────
 * game.db is only flushed by Conan on the server save interval. With the
@@ -35,6 +45,40 @@ from bot.tasks.black_ice_converter import record_black_ice_drop
 
 
 DEATH_SUPPRESSION_SECONDS = 180
+_PROP_TABLE_MARKER = b"\x79\x46\x00\x00"
+_STACK_COUNT_PROP_TYPE = 0x01
+
+
+def _stack_count_from_blob(blob: bytes | None) -> int:
+    """Return the stack count encoded in an item_inventory.data BLOB.
+
+    Defaults to 1 when the stack-count property is absent (single item).
+    Returns 1 on any parse failure to avoid spurious crediting if Conan
+    changes the layout between patches.
+    """
+    if not blob:
+        return 1
+    idx = blob.find(_PROP_TABLE_MARKER)
+    if idx == -1:
+        return 1
+    p = idx + len(_PROP_TABLE_MARKER)
+    if p + 4 > len(blob):
+        return 1
+    prop_count = int.from_bytes(blob[p:p + 4], "little")
+    p += 4
+    # Reasonable cap to ignore corrupt rows that would otherwise drive a
+    # very long loop on random byte sequences.
+    if prop_count > 32:
+        return 1
+    for _ in range(prop_count):
+        if p + 8 > len(blob):
+            break
+        type_id = int.from_bytes(blob[p:p + 4], "little")
+        value = int.from_bytes(blob[p + 4:p + 8], "little")
+        if type_id == _STACK_COUNT_PROP_TYPE:
+            return max(value, 1)
+        p += 8
+    return 1
 
 
 async def watch_inventory(pool: aiomysql.Pool, srv: ServerContext) -> None:
@@ -67,22 +111,19 @@ async def watch_inventory(pool: aiomysql.Pool, srv: ServerContext) -> None:
                 ) as game_db:
                     game_db.row_factory = aiosqlite.Row
                     for pid in online:
-                        # Conan stores each item as a separate row in
-                        # item_inventory (the binary `data` blob holds
-                        # per-item metadata but not a stack count). COUNT(*)
-                        # of matching rows therefore gives the exact total
-                        # quantity for that template owned by the character.
                         async with game_db.execute(
-                            "SELECT COUNT(*) AS total "
+                            "SELECT ii.data AS data "
                             "FROM characters c "
                             "JOIN account a ON a.id = c.playerid "
-                            "LEFT JOIN item_inventory ii "
+                            "JOIN item_inventory ii "
                             "  ON ii.owner_id = c.id AND ii.template_id = ? "
                             "WHERE a.user = ? AND a.online = 1",
                             (template_id, pid),
                         ) as rows:
-                            row = await rows.fetchone()
-                        counts[pid] = int(row["total"]) if row else 0
+                            total = 0
+                            async for row in rows:
+                                total += _stack_count_from_blob(row["data"])
+                        counts[pid] = total
 
                 cutoff = datetime.now() - timedelta(seconds=DEATH_SUPPRESSION_SECONDS)
                 for pid, current in counts.items():
