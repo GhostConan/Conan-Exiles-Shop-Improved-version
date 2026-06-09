@@ -89,7 +89,6 @@ async def process_orders(pool: aiomysql.Pool, servers_map: dict) -> None:
                             return
                         activate_cmd, duration_min = buff
                         await rcon_client.execute_for(srv, activate_cmd)
-                        from datetime import timedelta
                         end_time = datetime.now() + timedelta(minutes=int(duration_min or 60))
                         await cur.execute(
                             "UPDATE server_buffs SET isactive=1, lastActivated=%s, "
