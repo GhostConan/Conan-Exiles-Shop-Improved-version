@@ -35,6 +35,12 @@ TOP_N = 15
 
 
 async def post_kill_leaderboards(pool: aiomysql.Pool, srv: ServerContext, bot: commands.Bot) -> None:
+    if not bot.is_ready():
+        # Discord client still connecting (early scheduler tick after restart).
+        # Skip this cycle — bot.get_channel() would return None for every
+        # channel and we'd post nothing while logging spurious warnings.
+        logger.debug("Kill leaderboards: bot not ready yet, skipping cycle")
+        return
     logger.debug("Kill leaderboards running [{}]...", srv.server_name)
     try:
         sn = srv.server_name
