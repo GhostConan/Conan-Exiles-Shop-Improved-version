@@ -144,7 +144,7 @@ async def _process_line(
 
     m = RE_CHAT.search(line)
     if m:
-        await _handle_chat(pool, srv, m.group(1), m.group(2).strip())
+        await _handle_chat(pool, bot, srv, m.group(1), m.group(2).strip())
         return
 
 
@@ -261,7 +261,7 @@ async def _handle_black_ice_drop(
 
 
 async def _handle_chat(
-    pool: aiomysql.Pool, srv: ServerContext, char_name: str, message: str
+    pool: aiomysql.Pool, bot: commands.Bot, srv: ServerContext, char_name: str, message: str
 ) -> None:
     m = RE_BLACKICE_CMD.match(message)
     if m:
@@ -270,13 +270,19 @@ async def _handle_chat(
 
     m = RE_REGISTER_CMD.match(message)
     if m:
-        await _process_registration(pool, srv, char_name, m.group(1).upper())
+        await _process_registration(pool, bot, srv, char_name, m.group(1).upper())
 
 
 async def _process_registration(
-    pool: aiomysql.Pool, srv: ServerContext, char_name: str, code: str
+    pool: aiomysql.Pool, bot: commands.Bot, srv: ServerContext, char_name: str, code: str
 ) -> None:
-    """Complete the Discord ↔ Conan account link using the registration code."""
+    """Complete the Discord ↔ Conan account link using the registration code.
+
+    On success an account row is created if one does not already exist (the
+    previous UPDATE-only path silently failed for users whose account had not
+    yet been seeded by usersync), and a confirmation DM is sent to the user.
+    If the DM is blocked, a fallback notice goes to the serverlog channel.
+    """
     try:
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
@@ -315,9 +321,17 @@ async def _process_registration(
 
                 platform_id = row["platform_id"]
 
+                # Seed an accounts row if usersync hasn't created one yet,
+                # otherwise the UPDATE below updates zero rows and the link
+                # silently fails.
                 await cur.execute(
-                    "UPDATE accounts SET discordid = %s WHERE conanplatformid = %s",
-                    (discord_id, platform_id),
+                    "INSERT INTO accounts (conanplatformid, conanplayer, discordid, "
+                    "walletbalance, lastServer) "
+                    "VALUES (%s, %s, %s, 0, %s) "
+                    "ON DUPLICATE KEY UPDATE discordid = VALUES(discordid), "
+                    "conanplayer = VALUES(conanplayer), "
+                    "lastServer = VALUES(lastServer)",
+                    (platform_id, char_name, discord_id, srv.server_name),
                 )
                 await cur.execute(
                     "DELETE FROM registration_codes WHERE registrationcode = %s", (code,)
@@ -329,10 +343,48 @@ async def _process_registration(
                     char_name, platform_id, discord_id, srv.server_name,
                 )
 
+        await _notify_registration_success(bot, discord_id, char_name, srv.server_name)
+
     except Exception as exc:
         logger.error(
             "_process_registration error for '{}' code {}: {}", char_name, code, exc
         )
+
+
+async def _notify_registration_success(
+    bot: commands.Bot, discord_id: str | int, char_name: str, server_name: str
+) -> None:
+    """DM the user to confirm registration; fall back to the serverlog channel."""
+    embed = discord.Embed(
+        title="✅ Registration successful",
+        description=(
+            f"Your Discord account is now linked to **{char_name}** on **{server_name}**.\n"
+            f"Use `/balance` to check your coins and `/shop` to browse items."
+        ),
+        colour=discord.Colour.green(),
+    )
+    embed.timestamp = datetime.utcnow()
+
+    try:
+        user = bot.get_user(int(discord_id)) or await bot.fetch_user(int(discord_id))
+        await user.send(embed=embed)
+        logger.info("Sent registration DM to Discord ID {}", discord_id)
+        return
+    except discord.Forbidden:
+        logger.info("Registration DM blocked by user {} — posting to serverlog", discord_id)
+    except Exception as exc:
+        logger.warning("Could not DM registration confirmation to {}: {}", discord_id, exc)
+
+    if settings.serverlog_channel_id:
+        chan = bot.get_channel(settings.serverlog_channel_id)
+        if chan:
+            try:
+                await chan.send(
+                    content=f"<@{discord_id}>",
+                    embed=embed,
+                )
+            except Exception as exc:
+                logger.warning("Could not post registration notice to serverlog: {}", exc)
 
 
 async def _process_blackice_claim(
