@@ -67,8 +67,13 @@ async def watch_inventory(pool: aiomysql.Pool, srv: ServerContext) -> None:
                 ) as game_db:
                     game_db.row_factory = aiosqlite.Row
                     for pid in online:
+                        # Conan stores each item as a separate row in
+                        # item_inventory (the binary `data` blob holds
+                        # per-item metadata but not a stack count). COUNT(*)
+                        # of matching rows therefore gives the exact total
+                        # quantity for that template owned by the character.
                         async with game_db.execute(
-                            "SELECT COALESCE(SUM(ii.quantity), 0) AS total "
+                            "SELECT COUNT(*) AS total "
                             "FROM characters c "
                             "JOIN account a ON a.id = c.playerid "
                             "LEFT JOIN item_inventory ii "
