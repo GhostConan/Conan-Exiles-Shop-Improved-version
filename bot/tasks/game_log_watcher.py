@@ -66,6 +66,27 @@ RE_REGISTER_CMD = re.compile(r"^!register\s+([A-Z0-9]{6,12})$", re.IGNORECASE)
 # players have no need to type this command.
 RE_BLACKICE_CMD = re.compile(r"^!blackice\s+(\d+)$", re.IGNORECASE)
 
+# ── Connect / disconnect / steam-id mapping (BattlEye log lines) ─────────────
+# BattlEyeServer: Print Message: Player #0 asddsa (186.15.243.230:61598) connected
+RE_BE_CONNECT = re.compile(
+    r"BattlEyeServer:\s+Print Message:\s+Player\s+#\d+\s+(?P<name>.+?)\s+"
+    r"\((?P<ip>[\d.]+):\d+\)\s+connected"
+)
+# BattlEyeServer: Print Message: Player #0 asddsa disconnected
+RE_BE_DISCONNECT = re.compile(
+    r"BattlEyeServer:\s+Print Message:\s+Player\s+#\d+\s+(?P<name>.+?)\s+disconnected"
+)
+# BattlEyeServer: Registering player #0, with BattlEyePlayerGuid 76561198114134861 and name 'asddsa'
+RE_BE_REGISTER = re.compile(
+    r"BattlEyeServer:\s+Registering player\s+#\d+,\s+with BattlEyePlayerGuid\s+"
+    r"(?P<steamid>\d+)\s+and name\s+'(?P<name>[^']+)'"
+)
+
+# Per-character cache of (steamid, ip) for the current session so the connect
+# embed can include the SteamID once the BattlEye registration line arrives a
+# few milliseconds later. Cleared on disconnect.
+_session_info: dict[tuple[str, str], dict[str, str]] = {}
+
 
 def _parse_log_time(raw: str) -> datetime:
     base = datetime.strptime(raw, "%Y.%m.%d-%H.%M.%S:%f")
@@ -144,7 +165,28 @@ async def _process_line(
 
     m = RE_CHAT.search(line)
     if m:
-        await _handle_chat(pool, bot, srv, m.group(1), m.group(2).strip())
+        char_name = m.group(1)
+        message = m.group(2).strip()
+        await _handle_chat(pool, bot, srv, char_name, message)
+        await _post_chat_to_log(bot, srv, char_name, message)
+        return
+
+    m = RE_BE_CONNECT.search(line)
+    if m:
+        await _handle_connect(bot, srv, m.group("name").strip(), m.group("ip"))
+        return
+
+    m = RE_BE_REGISTER.search(line)
+    if m:
+        # BattlEye registration line arrives ~1 line after the connect.
+        # Update the cached session info and re-post a richer embed if the
+        # connect event already fired without a steam id.
+        await _handle_be_register(bot, srv, m.group("name").strip(), m.group("steamid"))
+        return
+
+    m = RE_BE_DISCONNECT.search(line)
+    if m:
+        await _handle_disconnect(bot, srv, m.group("name").strip())
         return
 
 
@@ -455,3 +497,111 @@ async def _process_blackice_claim(
         )
     except Exception as exc:
         logger.error("_process_blackice_claim error for '{}': {}", char_name, exc)
+
+# ── Server-log channel helpers ────────────────────────────────────────────────
+
+async def _serverlog_channel(bot: commands.Bot):
+    if not settings.serverlog_channel_id:
+        return None
+    return bot.get_channel(settings.serverlog_channel_id)
+
+
+async def _post_chat_to_log(
+    bot: commands.Bot, srv: ServerContext, char_name: str, message: str
+) -> None:
+    """Mirror in-game chat to the server log channel."""
+    chan = await _serverlog_channel(bot)
+    if not chan:
+        return
+    try:
+        await chan.send(f"💬  **{char_name}**: {message[:1800]}")
+    except Exception as exc:
+        logger.warning("Could not post chat to serverlog: {}", exc)
+
+
+async def _handle_connect(bot: commands.Bot, srv: ServerContext, name: str, ip: str) -> None:
+    key = (srv.server_name, name)
+    _session_info[key] = {"ip": ip, "steamid": ""}
+    chan = await _serverlog_channel(bot)
+    if not chan:
+        return
+    embed = discord.Embed(
+        title="🟢 Player Connected",
+        description=f"**{name}** joined the server",
+        colour=discord.Colour.green(),
+    )
+    embed.add_field(name="IP", value=ip, inline=True)
+    embed.add_field(name="SteamID", value="resolving…", inline=True)
+    embed.timestamp = datetime.utcnow()
+    try:
+        msg = await chan.send(embed=embed)
+        _session_info[key]["msg_id"] = str(msg.id)
+        _session_info[key]["channel_id"] = str(chan.id)
+    except Exception as exc:
+        logger.warning("Could not post connect notice: {}", exc)
+
+
+async def _handle_be_register(
+    bot: commands.Bot, srv: ServerContext, name: str, steamid: str
+) -> None:
+    """Edit the connect embed to fill in the SteamID once BattlEye reports it."""
+    key = (srv.server_name, name)
+    info = _session_info.get(key)
+    if not info:
+        # Connect line wasn't captured (race or restarted bot). Post a fresh
+        # embed so the log still records the registration.
+        chan = await _serverlog_channel(bot)
+        if chan:
+            embed = discord.Embed(
+                title="🟢 Player Registered",
+                description=f"**{name}** authenticated",
+                colour=discord.Colour.green(),
+            )
+            embed.add_field(name="SteamID", value=steamid, inline=True)
+            embed.timestamp = datetime.utcnow()
+            try:
+                await chan.send(embed=embed)
+            except Exception as exc:
+                logger.warning("Could not post register notice: {}", exc)
+        return
+
+    info["steamid"] = steamid
+    msg_id = info.get("msg_id")
+    chan_id = info.get("channel_id")
+    if not msg_id or not chan_id:
+        return
+    chan = bot.get_channel(int(chan_id))
+    if not chan:
+        return
+    try:
+        msg = await chan.fetch_message(int(msg_id))
+        embed = discord.Embed(
+            title="🟢 Player Connected",
+            description=f"**{name}** joined the server",
+            colour=discord.Colour.green(),
+        )
+        embed.add_field(name="IP", value=info.get("ip", "?"), inline=True)
+        embed.add_field(name="SteamID", value=steamid, inline=True)
+        embed.timestamp = msg.created_at
+        await msg.edit(embed=embed)
+    except Exception as exc:
+        logger.warning("Could not enrich connect embed for {}: {}", name, exc)
+
+
+async def _handle_disconnect(bot: commands.Bot, srv: ServerContext, name: str) -> None:
+    info = _session_info.pop((srv.server_name, name), {})
+    chan = await _serverlog_channel(bot)
+    if not chan:
+        return
+    embed = discord.Embed(
+        title="🔴 Player Disconnected",
+        description=f"**{name}** left the server",
+        colour=discord.Colour.red(),
+    )
+    if info.get("steamid"):
+        embed.add_field(name="SteamID", value=info["steamid"], inline=True)
+    embed.timestamp = datetime.utcnow()
+    try:
+        await chan.send(embed=embed)
+    except Exception as exc:
+        logger.warning("Could not post disconnect notice: {}", exc)
