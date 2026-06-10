@@ -176,9 +176,11 @@ async def _scan_damage_events(
     srv: ServerContext, cur, sn: str,
     last_rowid: int, event_types: list[int], now: datetime,
 ) -> int:
-    """Read new damage rows from game.db.game_events since last_rowid, map
-    ownerName → guildId via characters.guild, and update last_damage_at for
-    every affected clan. Returns the new high-water rowid.
+    """Read new damage rows from game.db.game_events since last_rowid and
+    update last_damage_at for every affected clan. game_events.ownerGuildId
+    is the guildId of the damaged building's owner, so we can use it
+    directly without joining through characters. Returns the new high-water
+    rowid.
     """
     if not event_types or not srv.game_db_path or not os.path.exists(srv.game_db_path):
         return last_rowid
@@ -188,53 +190,37 @@ async def _scan_damage_events(
         ) as game_db:
             placeholders = ",".join("?" for _ in event_types)
             sql_events = (
-                "SELECT rowid, ownerName FROM game_events "
+                "SELECT rowid, ownerGuildId FROM game_events "
                 f"WHERE eventType IN ({placeholders}) AND rowid > ? "
-                "AND ownerName IS NOT NULL AND ownerName <> '' "
+                "AND ownerGuildId IS NOT NULL AND ownerGuildId > 0 "
                 "ORDER BY rowid ASC LIMIT 2000"
             )
             params = list(event_types) + [last_rowid]
             async with game_db.execute(sql_events, params) as rows:
                 event_rows = await rows.fetchall()
-            if not event_rows:
-                return last_rowid
+        if not event_rows:
+            return last_rowid
 
-            # Resolve ownerName → guildId in one shot
-            names = sorted({r[1] for r in event_rows if r[1]})
-            name_to_guild: dict[str, int] = {}
-            if names:
-                placeholders_n = ",".join("?" for _ in names)
-                async with game_db.execute(
-                    f"SELECT char_name, guild FROM characters "
-                    f"WHERE char_name IN ({placeholders_n}) AND guild IS NOT NULL AND guild != 0",
-                    names,
-                ) as rows:
-                    for nrow in await rows.fetchall():
-                        name_to_guild[nrow[0]] = int(nrow[1])
+        max_rowid = last_rowid
+        damaged_clans: set[int] = set()
+        for ev_rowid, guild_id in event_rows:
+            max_rowid = max(max_rowid, int(ev_rowid))
+            if guild_id:
+                damaged_clans.add(int(guild_id))
 
-            max_rowid = last_rowid
-            damaged_clans: set[int] = set()
-            for ev_rowid, owner in event_rows:
-                max_rowid = max(max_rowid, int(ev_rowid))
-                clan = name_to_guild.get(owner)
-                if clan:
-                    damaged_clans.add(clan)
-
-            if damaged_clans:
-                # Upsert last_damage_at for each damaged clan. Insert a
-                # minimal row if the clan has no alert row yet.
-                for clan_id in damaged_clans:
-                    await cur.execute(
-                        f"INSERT INTO {sn}_raid_alerts "
-                        "(clan_id, last_damage_at) VALUES (%s, %s) "
-                        "ON DUPLICATE KEY UPDATE last_damage_at = VALUES(last_damage_at)",
-                        (clan_id, now),
-                    )
-                logger.debug(
-                    "Raid watcher [{}]: damage events from {} clan(s) via game_events",
-                    sn, len(damaged_clans),
+        if damaged_clans:
+            for clan_id in damaged_clans:
+                await cur.execute(
+                    f"INSERT INTO {sn}_raid_alerts "
+                    "(clan_id, last_damage_at) VALUES (%s, %s) "
+                    "ON DUPLICATE KEY UPDATE last_damage_at = VALUES(last_damage_at)",
+                    (clan_id, now),
                 )
-            return max_rowid
+            logger.debug(
+                "Raid watcher [{}]: damage events from {} clan(s) via game_events",
+                sn, len(damaged_clans),
+            )
+        return max_rowid
     except Exception as exc:
         logger.warning("game_events damage scan failed [{}]: {}", sn, exc)
         return last_rowid
