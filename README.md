@@ -259,8 +259,9 @@ Set any channel to `0` to disable that feature's Discord notifications.
 | RAID_WINDOW_START | 18:00 | Window open time (24h `HH:MM`) in `RAID_WINDOW_TZ`. |
 | RAID_WINDOW_END | 22:00 | Window close time (24h `HH:MM`) in `RAID_WINDOW_TZ`. Overnight windows are supported (start `22:00` end `02:00`). |
 | RAID_WINDOW_TZ | America/New_York | IANA timezone name used to resolve the window start/end. |
-| RAID_REBUILD_DAMAGE_LOOKBACK_SECONDS | 300 | A piece placement is treated as "rebuilding under attack" if the same clan took damage within this many seconds. |
+| RAID_REBUILD_DAMAGE_LOOKBACK_SECONDS | 900 | Repair-block window. A piece placement is treated as a violation if the same clan took damage within this many seconds (default 15 min). |
 | RAID_REBUILD_MIN_PIECES | 1 | Minimum new pieces in a single tick to trigger a rebuild alert. |
+| RAID_DAMAGE_EVENT_TYPES | 91,92,93,94 | CSV of `game_events.eventType` values that count as building damage. The watcher reads these directly from `game.db` so "break + instant rebuild" within a single save tick is still detected. |
 
 See the [Raid Tracker](#raid-tracker) section for the slash command workflow.
 
@@ -754,15 +755,26 @@ Windows that cross midnight are supported (for example `START=22:00 END=02:00`).
 
 ### Rebuild-under-attack detection
 
-A common house rule during raid hours is **repair only — no new construction**. While a raid window is active, the watcher also tracks per-clan piece **gains** between ticks. If a clan places new pieces while their base has taken damage within the last `RAID_REBUILD_DAMAGE_LOOKBACK_SECONDS` (default 5 min), an embed is posted to `SERVERLOG_CHANNEL_ID`:
+A common house rule during raid hours is **repair only after a cool-down — no construction while under fire**. While a raid window is active, the watcher tracks both damage and placement signals independently:
 
-> 🚧 **Rebuild During Raid** — Clan **\<name\>** placed **+N** new building piece(s) while their base was taking damage during the active raid window.
+- **Damage signal** — read directly from `game.db.game_events` (rows whose `eventType` is in `RAID_DAMAGE_EVENT_TYPES`, default `91,92,93,94`). The `ownerName` field on each row is mapped to a clan via `characters.guild → guilds.guildId`. Because damage events persist in `game_events` even after the piece has been put back, **a "break + instant rebuild" within a single server save tick is still caught**.
+- **Rebuild signal** — either the clan's current piece count went UP since the previous tick, OR their total-lost-since-baseline went DOWN (pieces restored against the running peak).
 
-The alert includes how long ago the last damage was observed and the clan's current piece count, so admins can quickly verify the violation and take action. Per-clan cooldown reuses `RAID_ALERT_COOLDOWN_SECONDS` to avoid spam.
+If a clan rebuilds within `RAID_REBUILD_DAMAGE_LOOKBACK_SECONDS` (default **900 s / 15 min**) of their last damage event, an embed is posted to `SERVERLOG_CHANNEL_ID`:
+
+> 🚧 **Rebuild During Raid** — Clan **\<name\>** placed **+N** building piece(s) within the 15-minute repair-block window. Last damage: \<Xm Ys ago\>. Pieces now: \<Y\>.
+
+Per-clan cooldown reuses `RAID_ALERT_COOLDOWN_SECONDS` to avoid spam.
 
 Tune sensitivity:
 - `RAID_REBUILD_MIN_PIECES` — raise from `1` if your players legitimately swap small decoration during raids.
-- `RAID_REBUILD_DAMAGE_LOOKBACK_SECONDS` — lower to make the link between damage and build stricter, raise to catch slower rebuilds after the attack pauses.
+- `RAID_REBUILD_DAMAGE_LOOKBACK_SECONDS` — change the "repair allowed N minutes after last damage" cool-down.
+- `RAID_DAMAGE_EVENT_TYPES` — adjust if a future Conan patch rotates the damage `eventType` numbers. To audit live values:
+
+```sql
+SELECT eventType, COUNT(*) FROM game_events GROUP BY eventType ORDER BY 2 DESC;
+```
+(run against `game.db` / `game_0.db` with any SQLite tool).
 
 ---
 
