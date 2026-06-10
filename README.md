@@ -251,10 +251,16 @@ Set any channel to `0` to disable that feature's Discord notifications.
 
 | Key | Default | Description |
 |---|---|---|
-| RAID_ALERT_CHANNEL_ID | 0 | Discord channel for raid damage embeds. `0` disables the raid tracker. |
+| RAID_ALERT_CHANNEL_ID | 0 | Discord channel for raid damage embeds. `0` disables damage alerts. |
 | RAID_ALERT_THRESHOLD | 10 | Minimum building pieces a clan must lose between checks before an alert is posted. |
 | RAID_ALERT_COOLDOWN_SECONDS | 60 | Per-clan cooldown between consecutive alerts so a long fight does not spam the channel. |
 | RAID_CHECK_INTERVAL_SECONDS | 10 | How often `raid_watcher` polls `building_piece_tracking` while a raid window is active. |
+| RAID_WINDOW_ENABLED | false | When true, the watcher auto-opens a raid window every day between `RAID_WINDOW_START` and `RAID_WINDOW_END`. |
+| RAID_WINDOW_START | 18:00 | Window open time (24h `HH:MM`) in `RAID_WINDOW_TZ`. |
+| RAID_WINDOW_END | 22:00 | Window close time (24h `HH:MM`) in `RAID_WINDOW_TZ`. Overnight windows are supported (start `22:00` end `02:00`). |
+| RAID_WINDOW_TZ | America/New_York | IANA timezone name used to resolve the window start/end. |
+| RAID_REBUILD_DAMAGE_LOOKBACK_SECONDS | 300 | A piece placement is treated as "rebuilding under attack" if the same clan took damage within this many seconds. |
+| RAID_REBUILD_MIN_PIECES | 1 | Minimum new pieces in a single tick to trigger a rebuild alert. |
 
 See the [Raid Tracker](#raid-tracker) section for the slash command workflow.
 
@@ -730,6 +736,33 @@ The raid tracker turns the building piece tracking data into actionable Discord 
 6. `/raidstatus` shows whether a window is active, when it ends, and the running per-clan damage tally.
 
 The tracker creates three MariaDB tables automatically on first run: `{SN}_raid_state`, `{SN}_raid_snapshot`, and `{SN}_raid_alerts`.
+
+### Scheduled raid window
+
+Set `RAID_WINDOW_ENABLED=true` to have the watcher open a daily raid window automatically. Configure:
+
+```
+RAID_WINDOW_ENABLED=true
+RAID_WINDOW_START=18:00       # 6:00 PM
+RAID_WINDOW_END=22:00         # 10:00 PM
+RAID_WINDOW_TZ=America/New_York
+```
+
+The watcher opens the window the first time it ticks inside the configured range, snapshots every clan's piece count, and posts a "Raid Window Opened" embed to `RAID_ALERT_CHANNEL_ID`. When the window closes, a matching "Raid Window Closed" embed is posted and the tracker disarms.
+
+Windows that cross midnight are supported (for example `START=22:00 END=02:00`). Manual `/raidstart` continues to work outside the scheduled hours; manual windows close on their `ends_at` and ignore the schedule.
+
+### Rebuild-under-attack detection
+
+A common house rule during raid hours is **repair only — no new construction**. While a raid window is active, the watcher also tracks per-clan piece **gains** between ticks. If a clan places new pieces while their base has taken damage within the last `RAID_REBUILD_DAMAGE_LOOKBACK_SECONDS` (default 5 min), an embed is posted to `SERVERLOG_CHANNEL_ID`:
+
+> 🚧 **Rebuild During Raid** — Clan **\<name\>** placed **+N** new building piece(s) while their base was taking damage during the active raid window.
+
+The alert includes how long ago the last damage was observed and the clan's current piece count, so admins can quickly verify the violation and take action. Per-clan cooldown reuses `RAID_ALERT_COOLDOWN_SECONDS` to avoid spam.
+
+Tune sensitivity:
+- `RAID_REBUILD_MIN_PIECES` — raise from `1` if your players legitimately swap small decoration during raids.
+- `RAID_REBUILD_DAMAGE_LOOKBACK_SECONDS` — lower to make the link between damage and build stricter, raise to catch slower rebuilds after the attack pauses.
 
 ---
 
