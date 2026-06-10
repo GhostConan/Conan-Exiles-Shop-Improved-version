@@ -100,6 +100,7 @@ async def main() -> None:
     from bot.tasks.server_settings_watcher import watch_server_settings
     from bot.tasks.firewall import apply_blocklist
     from bot.tasks.raid_watcher import watch_raid
+    from bot.tasks.shrine_watcher import watch_shrines
 
     # ── APScheduler ───────────────────────────────────────────────────────────
     scheduler = AsyncIOScheduler(timezone="UTC")
@@ -189,6 +190,12 @@ async def main() -> None:
             seconds=settings.raid_check_interval_seconds,
             args=[pool, srv, bot], id=f"raidwatch_{sn}", misfire_grace_time=30,
         )
+        if settings.shrine_channel_id:
+            scheduler.add_job(
+                watch_shrines, "interval",
+                seconds=settings.shrine_check_interval_seconds,
+                args=[pool, srv, bot], id=f"shrinewatch_{sn}", misfire_grace_time=30,
+            )
 
     logger.info("Scheduler has {} jobs total", len(scheduler.get_jobs()))
 

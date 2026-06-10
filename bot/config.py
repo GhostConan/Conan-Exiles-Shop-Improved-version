@@ -137,6 +137,20 @@ class Settings(BaseSettings):
     # attribution); set the CSV to whatever your game.db uses.
     raid_damage_event_types: str = "172"
 
+    # ── Shrine tracker (optional) ─────────────────────────────────────────────
+    # When SHRINE_CHANNEL_ID is set, the shrine_watcher polls game.db for all
+    # placeables whose class is listed in SHRINE_CLASSES (CSV of full BP
+    # paths). Every SHRINE_CHECK_INTERVAL_SECONDS it edits a single pinned
+    # leaderboard embed in that channel showing the per-clan shrine count
+    # and posts a "💥 Shrine Destroyed" alert whenever a tracked shrine
+    # disappears from actor_position. The destroyer name (if any) is
+    # pulled from destruction_history.
+    shrine_channel_id: int = 0
+    shrine_classes: str = (
+        "/Game/Systems/Building/Placeables/BP_PL_Altar_Yog_T3.BP_PL_Altar_Yog_T3_C"
+    )
+    shrine_check_interval_seconds: int = 60
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
