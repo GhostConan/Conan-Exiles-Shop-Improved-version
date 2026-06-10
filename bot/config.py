@@ -108,6 +108,25 @@ class Settings(BaseSettings):
     raid_alert_cooldown_seconds: int = 60
     raid_check_interval_seconds: int = 10
 
+    # ── Raid window (scheduled) ───────────────────────────────────────────────
+    # When RAID_WINDOW_ENABLED is true, raid_watcher automatically opens a
+    # raid window every day between RAID_WINDOW_START and RAID_WINDOW_END
+    # (24-hour HH:MM in the RAID_WINDOW_TZ timezone). Manual /raidstart still
+    # works outside the scheduled window. Windows that cross midnight are
+    # supported (e.g. start=22:00 end=02:00).
+    raid_window_enabled: bool = False
+    raid_window_start: str = "18:00"
+    raid_window_end: str = "22:00"
+    raid_window_tz: str = "America/New_York"
+
+    # ── Rebuild-under-attack detection ────────────────────────────────────────
+    # During an active raid window, if a clan places new building pieces while
+    # they have taken raid damage in the last RAID_REBUILD_DAMAGE_LOOKBACK_SECONDS
+    # and the burst size meets RAID_REBUILD_MIN_PIECES, post an embed to the
+    # SERVERLOG channel. Per-clan cooldown reuses RAID_ALERT_COOLDOWN_SECONDS.
+    raid_rebuild_damage_lookback_seconds: int = 300
+    raid_rebuild_min_pieces: int = 1
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
