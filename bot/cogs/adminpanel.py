@@ -84,60 +84,89 @@ class AdminPanelCog(commands.Cog, name="AdminPanel"):
     def pool(self) -> aiomysql.Pool:
         return self.bot.db_pool
 
-    # ── helper: resolve a player name to (platformid, conid, name) ────────────
-    async def _resolve_player(self, name: str) -> tuple[str, str, str] | None:
+    # ── helper: resolve a player name to (steam_platformid, conan_userid, conid, name) ──
+    async def _resolve_player(self, name: str) -> tuple[str, str, str, str] | None:
         sn = settings.server_name
         async with self.pool.acquire() as conn:
             async with conn.cursor() as cur:
                 await cur.execute("SET NAMES utf8mb4")
+                # `platformid` in our table is actually Conan's "userid"
+                # (A-XXXX format); `steamPlatformId` is Conan's "platformid"
+                # (the 64-bit Steam id). Both selectors work with KickPlayer.
                 await cur.execute(
-                    f"SELECT platformid, conid, player FROM {sn}_currentusers "
-                    "WHERE player = %s OR platformid = %s LIMIT 1",
-                    (name, name),
+                    f"SELECT steamPlatformId, platformid, conid, player FROM {sn}_currentusers "
+                    "WHERE player = %s OR platformid = %s OR steamPlatformId = %s LIMIT 1",
+                    (name, name, name),
                 )
                 row = await cur.fetchone()
         if row:
-            return (row[0] or "", str(row[1]) if row[1] is not None else "", row[2] or name)
+            return (
+                row[0] or "",
+                row[1] or "",
+                str(row[2]) if row[2] is not None else "",
+                row[3] or name,
+            )
         return None
 
     # ── /kick ─────────────────────────────────────────────────────────────────
     @app_commands.command(name="kick", description="[ADMIN] Kick an online player from the server.")
-    @app_commands.describe(player="Character name or platform ID", reason="Shown to the player")
+    @app_commands.describe(player="Character name, Steam ID, or FuncomID", reason="Shown to the player")
     @_admin_check()
     async def kick(self, interaction: discord.Interaction, player: str, reason: str = "Kicked by admin") -> None:
         await interaction.response.defer(ephemeral=True)
         srv = _get_srv(self.bot)
-        # Conan vanilla RCON syntax:
-        #   KickPlayer (index|name|userid|platformid|player) <id> <message>
-        # `player` accepts the in-game character name (this is the friendliest
-        # for admins typing names from the kill feed).
-        try:
-            resp = await rcon_client.execute_for(
-                srv, f'KickPlayer player "{player}" "{reason}"'
-            )
+        target = await self._resolve_player(player)
+        if not target:
             await interaction.followup.send(
-                f"✅ Kicked **{player}**.\nReason: {reason}\n```{resp[:300]}```", ephemeral=True
+                f"❌ Could not find online player matching `{player}`. Use `/online` to see who's on.",
+                ephemeral=True,
             )
-            await _audit(self.bot, interaction.user, "Kick", f"**{player}** — {reason}")
+            return
+        steam_id, conan_userid, _conid, real_name = target
+        # Use whichever selector we have an id for. `platformid` is Conan's
+        # name for the 64-bit Steam id; `userid` is Conan's name for the
+        # FunCom Live Services 'A-XXXX' id.
+        if steam_id:
+            cmd = f'KickPlayer platformid {steam_id} "{reason}"'
+        else:
+            cmd = f'KickPlayer userid {conan_userid} "{reason}"'
+        try:
+            resp = await rcon_client.execute_for(srv, cmd)
+            await interaction.followup.send(
+                f"✅ Kicked **{real_name}**.\nReason: {reason}\n```{resp[:300]}```",
+                ephemeral=True,
+            )
+            await _audit(self.bot, interaction.user, "Kick", f"**{real_name}** — {reason}")
         except Exception as exc:
             await interaction.followup.send(f"❌ RCON error: {exc}", ephemeral=True)
 
     # ── /ban ──────────────────────────────────────────────────────────────────
     @app_commands.command(name="ban", description="[ADMIN] Ban a player from the server.")
-    @app_commands.describe(player="Character name or platform ID", reason="Shown to the player")
+    @app_commands.describe(player="Character name, Steam ID, or FuncomID", reason="Shown to the player")
     @_admin_check()
     async def ban(self, interaction: discord.Interaction, player: str, reason: str = "Banned by admin") -> None:
         await interaction.response.defer(ephemeral=True)
         srv = _get_srv(self.bot)
-        # Conan vanilla RCON: BanPlayer (index|name|userid|platformid|player) <id> <message>
-        try:
-            resp = await rcon_client.execute_for(
-                srv, f'BanPlayer player "{player}" "{reason}"'
-            )
+        target = await self._resolve_player(player)
+        if not target:
             await interaction.followup.send(
-                f"✅ Banned **{player}**.\nReason: {reason}\n```{resp[:300]}```", ephemeral=True
+                f"❌ Could not find online player matching `{player}`. To ban an offline player by ID, "
+                f"use the Conan launcher's ban list directly.",
+                ephemeral=True,
             )
-            await _audit(self.bot, interaction.user, "Ban", f"**{player}** — {reason}")
+            return
+        steam_id, conan_userid, _conid, real_name = target
+        if steam_id:
+            cmd = f'BanPlayer platformid {steam_id} "{reason}"'
+        else:
+            cmd = f'BanPlayer userid {conan_userid} "{reason}"'
+        try:
+            resp = await rcon_client.execute_for(srv, cmd)
+            await interaction.followup.send(
+                f"✅ Banned **{real_name}**.\nReason: {reason}\n```{resp[:300]}```",
+                ephemeral=True,
+            )
+            await _audit(self.bot, interaction.user, "Ban", f"**{real_name}** — {reason}")
         except Exception as exc:
             await interaction.followup.send(f"❌ RCON error: {exc}", ephemeral=True)
 
@@ -220,7 +249,7 @@ class AdminPanelCog(commands.Cog, name="AdminPanel"):
                 await cur.execute("SET NAMES utf8mb4")
                 await cur.execute(
                     f"SELECT X, Y FROM {sn}_currentusers WHERE platformid = %s LIMIT 1",
-                    (target[0],),
+                    (target[1],),
                 )
                 pos = await cur.fetchone()
         if not pos:
@@ -231,9 +260,9 @@ class AdminPanelCog(commands.Cog, name="AdminPanel"):
         try:
             await rcon_client.execute_for(srv, f"con {admin_link[1]} TeleportPlayer {int(x)} {int(y)} 5000")
             await interaction.followup.send(
-                f"✅ Teleported you to **{target[2]}** at `{int(x)} {int(y)}`.", ephemeral=True
+                f"✅ Teleported you to **{target[3]}** at `{int(x)} {int(y)}`.", ephemeral=True
             )
-            await _audit(self.bot, interaction.user, "TpTo", f"to **{target[2]}**")
+            await _audit(self.bot, interaction.user, "TpTo", f"to **{target[3]}**")
         except Exception as exc:
             await interaction.followup.send(f"❌ RCON error: {exc}", ephemeral=True)
 
@@ -267,11 +296,11 @@ class AdminPanelCog(commands.Cog, name="AdminPanel"):
         x, y = pos
         srv = _get_srv(self.bot)
         try:
-            await rcon_client.execute_for(srv, f"con {target[1]} TeleportPlayer {int(x)} {int(y)} 5000")
+            await rcon_client.execute_for(srv, f"con {target[2]} TeleportPlayer {int(x)} {int(y)} 5000")
             await interaction.followup.send(
-                f"✅ Brought **{target[2]}** to your position.", ephemeral=True
+                f"✅ Brought **{target[3]}** to your position.", ephemeral=True
             )
-            await _audit(self.bot, interaction.user, "TpHere", f"brought **{target[2]}**")
+            await _audit(self.bot, interaction.user, "TpHere", f"brought **{target[3]}**")
         except Exception as exc:
             await interaction.followup.send(f"❌ RCON error: {exc}", ephemeral=True)
 
