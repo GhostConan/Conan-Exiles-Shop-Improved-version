@@ -41,6 +41,7 @@ COGS = [
     "bot.cogs.admin",
     "bot.cogs.registration",
     "bot.cogs.vault",
+    "bot.cogs.raid",
 ]
 
 
@@ -97,6 +98,7 @@ async def main() -> None:
     from bot.tasks.teleporter import process_teleports
     from bot.tasks.server_settings_watcher import watch_server_settings
     from bot.tasks.firewall import apply_blocklist
+    from bot.tasks.raid_watcher import watch_raid
 
     # ── APScheduler ───────────────────────────────────────────────────────────
     scheduler = AsyncIOScheduler(timezone="UTC")
@@ -180,6 +182,11 @@ async def main() -> None:
         scheduler.add_job(
             watch_server_settings, "interval", minutes=5,
             args=[pool, srv, bot], id=f"settingswatcher_{sn}", misfire_grace_time=60,
+        )
+        scheduler.add_job(
+            watch_raid, "interval",
+            seconds=settings.raid_check_interval_seconds,
+            args=[pool, srv, bot], id=f"raidwatch_{sn}", misfire_grace_time=30,
         )
 
     logger.info("Scheduler has {} jobs total", len(scheduler.get_jobs()))
