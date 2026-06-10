@@ -131,8 +131,11 @@ class Settings(BaseSettings):
     raid_rebuild_damage_lookback_seconds: int = 900
     raid_rebuild_min_pieces: int = 1
     # CSV of game_events.eventType values that count as building damage.
-    # Verified on live Conan builds: 91/92/93/94 are building damage rows.
-    raid_damage_event_types: str = "91,92,93,94"
+    # Default 172 matches current Conan builds where each building piece
+    # destruction emits an event with eventType=172 and ownerGuildId set
+    # to the owning clan's guildId. Legacy builds used 91-94 (no owner
+    # attribution); set the CSV to whatever your game.db uses.
+    raid_damage_event_types: str = "172"
 
 
 @lru_cache(maxsize=1)

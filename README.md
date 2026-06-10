@@ -757,7 +757,7 @@ Windows that cross midnight are supported (for example `START=22:00 END=02:00`).
 
 A common house rule during raid hours is **repair only after a cool-down — no construction while under fire**. While a raid window is active, the watcher tracks both damage and placement signals independently:
 
-- **Damage signal** — read directly from `game.db.game_events` (rows whose `eventType` is in `RAID_DAMAGE_EVENT_TYPES`, default `91,92,93,94`). The `ownerName` field on each row is mapped to a clan via `characters.guild → guilds.guildId`. Because damage events persist in `game_events` even after the piece has been put back, **a "break + instant rebuild" within a single server save tick is still caught**.
+- **Damage signal** — read directly from `game.db.game_events` (rows whose `eventType` is in `RAID_DAMAGE_EVENT_TYPES`, default `172` on current Conan; legacy `91,92,93,94` exists in older builds but had no owner attribution). The `ownerGuildId` field is used directly as the clan_id, so no character→guild lookup is needed. Because damage events persist in `game_events` even after the piece has been put back, **a "break + instant rebuild" within a single server save tick is still caught**.
 - **Rebuild signal** — either the clan's current piece count went UP since the previous tick, OR their total-lost-since-baseline went DOWN (pieces restored against the running peak).
 
 If a clan rebuilds within `RAID_REBUILD_DAMAGE_LOOKBACK_SECONDS` (default **900 s / 15 min**) of their last damage event, an embed is posted to `SERVERLOG_CHANNEL_ID`:
