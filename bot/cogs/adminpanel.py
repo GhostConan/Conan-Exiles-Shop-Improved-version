@@ -540,55 +540,54 @@ class AdminPanelCog(commands.Cog, name="AdminPanel"):
     async def _restart_countdown(
         self, srv: ServerContext, delay_minutes: int, reason: str, admin: discord.User
     ) -> None:
+        """Broadcast warnings at every minute from N down to 1, then 30s, 10s, 5s, then restart."""
         import asyncio
-        # Countdown checkpoints (minutes remaining when we broadcast)
-        checkpoints = [m for m in (60, 30, 15, 10, 5, 3, 2, 1) if m < delay_minutes]
-        elapsed = 0
-        try:
-            for cp in checkpoints:
-                wait = (delay_minutes - cp) - elapsed
-                if wait > 0:
-                    await asyncio.sleep(wait * 60)
-                    elapsed += wait
-                try:
-                    await rcon_client.broadcast_for(
-                        srv, f"Server restart in {cp} minute(s) — {reason}"
-                    )
-                except Exception as exc:
-                    logger.warning("Restart broadcast failed at {} min: {}", cp, exc)
-            # Final 60 s -> 0 with 10-second granularity
-            remaining_seconds = max(0, (delay_minutes - elapsed) * 60)
-            for secs in (60, 30, 15, 10, 5):
-                if remaining_seconds <= secs:
-                    continue
-                await asyncio.sleep(remaining_seconds - secs)
-                remaining_seconds = secs
-                try:
-                    await rcon_client.broadcast_for(srv, f"Server restart in {secs} seconds!")
-                except Exception as exc:
-                    logger.warning("Restart broadcast failed at {}s: {}", secs, exc)
-            if remaining_seconds > 0:
-                await asyncio.sleep(remaining_seconds)
 
-            # Issue the restart. Vanilla Conan has `restart` (in-place restart
-            # without dropping the launcher process) and `Shutdown` (full quit
-            # — relies on DedicatedServerLauncher's "Start server if not
-            # running" to relaunch). Prefer `restart` for cleaner behaviour.
-            for cmd in ("restart", "Shutdown", "Quit"):
-                try:
-                    await rcon_client.execute_for(srv, cmd)
-                    logger.info("Server restart issued via RCON `{}` by {}", cmd, admin)
-                    break
-                except Exception as exc:
-                    logger.warning("Restart RCON `{}` failed: {}", cmd, exc)
-            await _audit(
-                self.bot, admin, "Server Restart Executed",
-                f"Issued shutdown after {delay_minutes} min — {reason}",
-            )
+        async def _say(text: str) -> None:
+            try:
+                await rcon_client.broadcast_for(srv, text)
+            except Exception as exc:
+                logger.warning("Restart broadcast failed [{}]: {}", text, exc)
+
+        # Opening warning
+        await _say(f"⚠ Server restart in {delay_minutes} minute(s). Reason: {reason}")
+
+        # Minute-by-minute countdown from (delay_minutes - 1) down to 1
+        for remaining_min in range(delay_minutes - 1, 0, -1):
+            await asyncio.sleep(60)
+            await _say(f"⚠ Server restart in {remaining_min} minute(s). Reason: {reason}")
+
+        # Final minute: 30s, 10s, 5s warnings
+        try:
+            await asyncio.sleep(30)
+            await _say("⚠ Server restart in 30 seconds!")
+            await asyncio.sleep(20)
+            await _say("⚠ Server restart in 10 seconds!")
+            await asyncio.sleep(5)
+            await _say("⚠ Server restart in 5 seconds!")
+            await asyncio.sleep(5)
+            await _say("⚠ Restarting now…")
         except asyncio.CancelledError:
             raise
+
+        # Issue the restart. Conan's `restart` verb stops the server; the
+        # DedicatedServerLauncher must have "Start server if not running"
+        # ENABLED for the launcher to relaunch it automatically. Without
+        # that option, the server simply stays down.
+        try:
+            resp = await rcon_client.execute_for(srv, "restart")
+            logger.info("Server restart issued by {} (response: {!r})", admin, resp)
+            await _audit(
+                self.bot, admin, "Server Restart Executed",
+                f"RCON `restart` sent after {delay_minutes} min — {reason}. "
+                f"(Launcher must auto-relaunch.)",
+            )
         except Exception as exc:
-            logger.error("Restart countdown error: {}", exc, exc_info=True)
+            logger.error("Restart RCON command failed: {}", exc)
+            await _audit(
+                self.bot, admin, "Server Restart FAILED",
+                f"RCON error: {exc}",
+            )
 
 
 async def setup(bot: commands.Bot) -> None:
