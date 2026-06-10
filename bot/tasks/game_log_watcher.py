@@ -168,8 +168,27 @@ async def _process_line(
         # (Falling, Drowning, Hunger, etc.).
         if not killer and cause.lower() == "none":
             return
+        # When Conan does not capture the killer name (arrows, bombs, traps,
+        # explosions, poison, suicide), label the kill by CauseOfDeath instead
+        # of misattributing it to "Environment". This produces feed lines like:
+        #   "MUCKXSQUARE died (Combat – attacker unknown)"
+        #   "Haggy died (Poison)"
+        #   "asddsa died (Suicide)"
         if not killer or killer.lower() in ("self destructing", "none"):
-            killer = "Environment"
+            cause_lower = cause.lower()
+            if cause_lower == "combat":
+                killer = "Unknown attacker"
+            elif cause_lower == "suicide":
+                killer = "Suicide"
+            elif cause_lower == "adminkill":
+                killer = "Admin"
+            elif cause_lower in ("none", ""):
+                killer = "Environment"
+            else:
+                # Falling, Drowning, Poison, Hunger, Thirst, Bleed, …
+                killer = cause.capitalize()
+        elif killer.lower() == "yourself":
+            killer = "Suicide"
         await _handle_kill(bot, killer, victim, pool, srv)
         return
 
