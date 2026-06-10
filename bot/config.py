@@ -120,12 +120,19 @@ class Settings(BaseSettings):
     raid_window_tz: str = "America/New_York"
 
     # ── Rebuild-under-attack detection ────────────────────────────────────────
-    # During an active raid window, if a clan places new building pieces while
-    # they have taken raid damage in the last RAID_REBUILD_DAMAGE_LOOKBACK_SECONDS
-    # and the burst size meets RAID_REBUILD_MIN_PIECES, post an embed to the
-    # SERVERLOG channel. Per-clan cooldown reuses RAID_ALERT_COOLDOWN_SECONDS.
-    raid_rebuild_damage_lookback_seconds: int = 300
+    # During an active raid window, the watcher reads damage events directly
+    # from game.db.game_events (eventType in RAID_DAMAGE_EVENT_TYPES) so a
+    # "break + instant rebuild" within the same server save tick is still
+    # caught even when the net piece count is unchanged. If a clan places new
+    # pieces (or restores destroyed ones) while they have taken raid damage
+    # within the last RAID_REBUILD_DAMAGE_LOOKBACK_SECONDS, an embed is posted
+    # to the SERVERLOG channel. Default lookback is 15 minutes — clans are
+    # expected to wait that long after the last damage before repairing.
+    raid_rebuild_damage_lookback_seconds: int = 900
     raid_rebuild_min_pieces: int = 1
+    # CSV of game_events.eventType values that count as building damage.
+    # Verified on live Conan builds: 91/92/93/94 are building damage rows.
+    raid_damage_event_types: str = "91,92,93,94"
 
 
 @lru_cache(maxsize=1)
