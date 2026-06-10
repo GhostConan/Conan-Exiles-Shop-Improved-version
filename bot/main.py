@@ -42,6 +42,7 @@ COGS = [
     "bot.cogs.registration",
     "bot.cogs.vault",
     "bot.cogs.raid",
+    "bot.cogs.adminpanel",
 ]
 
 
