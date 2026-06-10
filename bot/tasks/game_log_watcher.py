@@ -153,10 +153,20 @@ async def _process_line(
         killer = m.group("killer").strip()
         victim = m.group("victim").strip()
         internal = m.group("internal")
+        cause = m.group("cause").strip()
         # Skip wildlife / NPC-vs-NPC noise (otherwise the kill feed channel is
         # flooded with "Vulture was killed by Spider" every few seconds). Only
         # forward kills where the victim is a player character.
         if internal.startswith("BP_NPC_") or internal.startswith("BP_Wildlife_"):
+            return
+        # Skip logout / respawn artifacts. Conan emits the same
+        # KillCharacterWithRagdoll line with empty KillerNameInput AND
+        # CauseOfDeath=None when a player logs out, character is restored,
+        # or the avatar is despawned for a relog. These are NOT real deaths
+        # — they were spamming the kill feed as "Environment killed <player>"
+        # every minute. Real environmental deaths carry a meaningful cause
+        # (Falling, Drowning, Hunger, etc.).
+        if not killer and cause.lower() == "none":
             return
         if not killer or killer.lower() in ("self destructing", "none"):
             killer = "Environment"
