@@ -27,9 +27,12 @@ A fully asynchronous Discord bot for Conan Exiles dedicated servers. Combines an
 19. [RCON Health Monitoring](#rcon-health-monitoring)
 20. [Server Settings Watcher](#server-settings-watcher)
 21. [Firewall Blocklist](#firewall-blocklist)
-22. [Adjusting Log Regexes](#adjusting-log-regexes)
-23. [Troubleshooting](#troubleshooting)
-24. [Tech Stack](#tech-stack)
+22. [Server Log Channel](#server-log-channel)
+23. [Raid Tracker](#raid-tracker)
+24. [Admin Panel](#admin-panel)
+25. [Adjusting Log Regexes](#adjusting-log-regexes)
+26. [Troubleshooting](#troubleshooting)
+27. [Tech Stack](#tech-stack)
 
 ---
 
@@ -55,6 +58,12 @@ A fully asynchronous Discord bot for Conan Exiles dedicated servers. Combines an
 - Server settings watcher — monitors game.db for setting changes and posts Discord alerts
 - Firewall blocklist management — block/unblock IPs via netsh (Windows) or iptables (Linux)
 - Admin commands for currency, items, teleport, broadcast, and moderation
+- Server log channel — mirrors in-game chat, connect/disconnect events, and audit logs of every admin command to one Discord channel
+- Real PvP attribution — kill feed resolves the real attacker for arrows, bombs, and traps from `game.db.game_events` instead of showing "Unknown"
+- Auto Black Ice detection — drops are detected directly from `game.db` inventory diffs; players do not need to type any chat command
+- Raid tracker (`/raidstart`, `/raidstop`, `/raidstatus`) — snapshots building piece counts and posts per-clan damage alerts during a raid window
+- Admin Panel cog — `/kick`, `/ban`, `/unban`, `/whitelist`, `/unwhitelist`, `/listbans`, `/tpto`, `/tphere`, `/give`, `/find`, `/online`, `/snapshot`, `/serverrestart` with audit logging
+- In-game restart announcements — `/serverrestart <minutes>` broadcasts a minute-by-minute countdown to all players before restarting
 
 ---
 
@@ -187,6 +196,8 @@ GAME_LOG_PATH=C:/Conan/ConanSandbox/Saved/Logs/ConanSandbox.log
 | SERVER_BUFFS_CHANNEL_ID | 0 | Server buff notifications channel |
 | VAULT_RENTAL_CHANNEL_ID | 0 | Vault rental notifications channel |
 | EVENT_CHANNEL_ID | 0 | General event announcements channel |
+| SERVERLOG_CHANNEL_ID | 0 | Mirror of in-game chat, connect/disconnect events, registration confirmations, and audit log of every admin-panel command. |
+| RAID_ALERT_CHANNEL_ID | 0 | Channel where the raid tracker posts per-clan damage embeds during an active raid window. |
 
 Set any channel to `0` to disable that feature's Discord notifications.
 
@@ -225,6 +236,7 @@ Set any channel to `0` to disable that feature's Discord notifications.
 |---|---|---|
 | ADMIN_ROLE | Admin | Discord role name with full admin access |
 | MOD_ROLE | Moderator | Discord role name with moderator access |
+| ADMINBOT_ROLE | AdminBot | Discord role required to run `/serverrestart`. Kept separate from `ADMIN_ROLE` so you can limit who is allowed to bounce the game server. |
 | VIP1_ROLE | VIP1 | First VIP tier role name |
 | VIP2_ROLE | VIP2 | Second VIP tier role name |
 | VIP3_ROLE | VIP3 | Third VIP tier role name |
@@ -234,6 +246,17 @@ Set any channel to `0` to disable that feature's Discord notifications.
 | SERVER_SETTINGS_CHANNEL_ID | 0 | Channel for server settings change alerts |
 | FIREWALL_ENABLED | false | Enable OS-level IP blocking via /addblock and /removeblock |
 | FIREWALL_BLOCKLIST_FILE | blocklist.txt | Path to the IP blocklist file |
+
+### Raid Tracker (optional)
+
+| Key | Default | Description |
+|---|---|---|
+| RAID_ALERT_CHANNEL_ID | 0 | Discord channel for raid damage embeds. `0` disables the raid tracker. |
+| RAID_ALERT_THRESHOLD | 10 | Minimum building pieces a clan must lose between checks before an alert is posted. |
+| RAID_ALERT_COOLDOWN_SECONDS | 60 | Per-clan cooldown between consecutive alerts so a long fight does not spam the channel. |
+| RAID_CHECK_INTERVAL_SECONDS | 10 | How often `raid_watcher` polls `building_piece_tracking` while a raid window is active. |
+
+See the [Raid Tracker](#raid-tracker) section for the slash command workflow.
 
 ---
 
@@ -370,6 +393,34 @@ These commands require the Admin or Moderator Discord role configured in `.env`.
 | `/addblock <ip_address>` | Adds an IP address or CIDR range to the firewall blocklist. Requires `FIREWALL_ENABLED=true`. |
 | `/removeblock <ip_address>` | Removes an IP address or CIDR range from the firewall blocklist. |
 
+### Admin Panel Commands
+
+Provided by the `adminpanel` cog. Require the `ADMIN_ROLE` or `MOD_ROLE` Discord role unless noted otherwise. Every successful action is mirrored as an embed to `SERVERLOG_CHANNEL_ID` for an audit trail.
+
+| Command | Description |
+|---|---|
+| `/kick <player> [reason]` | Kicks an online player. Resolves the player's SteamID from `{SN}_currentusers` and runs `KickPlayer platformid <SteamID> <reason>`. |
+| `/ban <player> [reason]` | Bans the player via `BanPlayer platformid`. |
+| `/unban <platform_id>` | Removes a ban (`UnbanPlayer <platformid>`). |
+| `/whitelist <platform_id>` | Adds a SteamID to the server whitelist. |
+| `/unwhitelist <platform_id>` | Removes a SteamID from the whitelist. |
+| `/listbans` | Shows the current ban list from the server. |
+| `/tpto <player>` | Teleports your character to another online player. |
+| `/tphere <player>` | Teleports another online player to you. |
+| `/give <player> <template_id> <qty>` | Spawns items into another player's inventory. |
+| `/find <name>` | Finds online players whose character or FuncomID matches a substring. |
+| `/online` | Lists all currently online players with their SteamID and clan. |
+| `/snapshot` | Triggers a manual `game.db` snapshot copy for backup or inspection. |
+| `/serverrestart <minutes> [reason]` | **Requires `ADMINBOT_ROLE`.** Broadcasts a minute-by-minute countdown in-game then runs the `restart` RCON verb. See the [Server Restart](#server-restart) notes. |
+
+### Raid Tracker Commands
+
+| Command | Description |
+|---|---|
+| `/raidstart [hours]` | Opens a raid window (default 2 hours). Snapshots every clan's building piece count and arms `raid_watcher`. Requires the admin role. |
+| `/raidstop` | Closes the raid window early. |
+| `/raidstatus` | Shows whether a raid window is active, when it ends, and the per-clan damage so far. |
+
 ---
 
 ## Background Tasks
@@ -428,9 +479,15 @@ How it works:
 Example: A player drops 35 Black Ice across several drops. The converter awards 3 Hardened Bricks and carries over 5 Black Ice to the next cycle.
 
 Default item IDs (configurable in `.env`):
-- Black Ice: `18040`
+- Black Ice: `18040` (commonly `18041` on current Conan patches — verify on your live server)
 - Hardened Brick: `11142`
 - Conversion rate: `10:1`
+
+> **Template IDs vary by Conan patch.** Always confirm the correct ID by spawning the item in-game via the admin panel before populating the shop or `.env`. For example, Iron Sword has been seen as both `51020` and `51960` across releases.
+
+### Detection via game.db (no chat command required)
+
+In addition to the chat-driven detection above, `inventory_watcher` diffs the `item_inventory` table in `game.db` every minute and credits any new Black Ice stacks directly to the character's account. Players no longer have to type anything in chat for a drop to be picked up.
 
 ---
 
@@ -630,7 +687,84 @@ Note: On Linux, `iptables` rules are not persistent across reboots by default. I
 
 ---
 
+## Server Log Channel
 
+When `SERVERLOG_CHANNEL_ID` is set, the bot mirrors live server activity into one Discord channel:
+
+- **In-game chat** — every `Global` / `Local` / `Clan` chat line.
+- **Connect / disconnect** — an embed is posted when a player joins. The embed is edited in place to attach the SteamID as soon as the BattlEye GUID registration line appears in the log.
+- **Registration confirmations** — fallback notice when a `!register` DM cannot be delivered (DMs disabled by the user).
+- **Admin audit log** — every successful admin-panel command (`/kick`, `/ban`, `/give`, `/serverrestart`, etc.) posts an embed with the moderator, target, and parameters used.
+
+Set the channel ID once in `.env`:
+
+```
+SERVERLOG_CHANNEL_ID=<your_discord_channel_id>
+```
+
+The kill feed has its own channel (`KILLLOG_CHANNEL_ID`) and is independent of the server log channel.
+
+### PvP attacker resolution
+
+For arrow, bomb, and trap kills, the raw server log line frequently has an empty `KillerNameInput=` field. When this happens, the kill formatter:
+
+1. Looks up the matching event in `game.db.game_events` (`eventType=103`, `ownerName=victim`) within a short time window.
+2. Uses `causerName` from that row as the real attacker.
+3. Falls back to a labelled embed if no event is found — `Suicide`, `Poison`, `Falling`, or `Unknown attacker` based on `CauseOfDeath`.
+
+Lines that represent logouts or respawns (`KillerNameInput=` plus `CauseOfDeath=None`) are dropped entirely so they no longer pollute the feed.
+
+---
+
+## Raid Tracker
+
+The raid tracker turns the building piece tracking data into actionable Discord alerts during an organised raid window.
+
+**Workflow:**
+
+1. An admin runs `/raidstart [hours]` (default 2). The bot snapshots every clan's current piece count into `{SN}_raid_snapshot`, clears `{SN}_raid_alerts`, and arms `raid_watcher`.
+2. `raid_watcher` polls `building_piece_tracking` every `RAID_CHECK_INTERVAL_SECONDS` (default 10).
+3. For each clan that has lost at least `RAID_ALERT_THRESHOLD` pieces since the last alert, an embed is posted to `RAID_ALERT_CHANNEL_ID` with the clan name, total lost, and remaining pieces.
+4. A per-clan cooldown of `RAID_ALERT_COOLDOWN_SECONDS` suppresses spam during long fights — the same clan will not generate more than one alert per cooldown window.
+5. The window auto-closes when its scheduled `ends_at` passes, or immediately when an admin runs `/raidstop`.
+6. `/raidstatus` shows whether a window is active, when it ends, and the running per-clan damage tally.
+
+The tracker creates three MariaDB tables automatically on first run: `{SN}_raid_state`, `{SN}_raid_snapshot`, and `{SN}_raid_alerts`.
+
+---
+
+## Admin Panel
+
+The `adminpanel` cog provides ban / kick / whitelist / teleport / item-spawn / restart commands as slash commands. See [Admin Panel Commands](#admin-panel-commands) for the full table.
+
+### Audit logging
+
+Every successful action is mirrored as an embed to `SERVERLOG_CHANNEL_ID`. The embed contains the moderator's Discord tag, the target (character name + SteamID where available), the RCON verb run, and any reason text.
+
+### Role gating
+
+- Most commands accept either the `ADMIN_ROLE` or `MOD_ROLE` Discord roles.
+- `/serverrestart` is stricter: it only accepts members of `ADMINBOT_ROLE` (default `AdminBot`). This lets you give moderators kick/ban access without also giving them the ability to bounce the game server.
+
+### Conan RCON quirks the cog works around
+
+- `KickPlayer player <name>` rejects character names — the cog resolves the player's SteamID from `{SN}_currentusers` first and always uses `KickPlayer platformid <SteamID>`.
+- Vanilla Conan has no `mute` RCON verb, so there is no `/mute` command. Use `/ban` followed by `/unban` if you need to silence someone short-term.
+
+<a name="server-restart"></a>
+### `/serverrestart` — countdown and relaunch
+
+`/serverrestart <minutes> [reason]` does three things:
+
+1. Validates `1 <= minutes <= 60`.
+2. Sends an in-game `broadcast` every minute of the countdown ("Server restart in 5 minutes…", "…in 4 minutes…", …, "…in 1 minute. Save your progress.").
+3. Runs the `restart` RCON verb.
+
+**Operator note (important):** The Conan `restart` RCON verb only STOPS the server process — it does not start a new one. For the server to actually come back up you must run it under a supervisor that relaunches it. With the official `DedicatedServerLauncher`, enable the **"Start server if not running"** checkbox; with systemd or a `.bat` loop the same applies. Without this, `/serverrestart` will leave the server offline until you start it manually.
+
+---
+
+## Adjusting Log Regexes
 
 The log watcher uses regular expressions to detect events. If your server version or mods produce a different log format, open `bot/tasks/game_log_watcher.py` and adjust the relevant pattern.
 
@@ -694,6 +828,8 @@ Replace `YOUR_SERVER_ID` with your Discord server's ID. To find it: right-click 
 
 - The bot opens `game.db` as read-only. Ensure the path in `GAME_DB_PATH` is correct and the file exists
 - On a live server, `game.db` is usually located at: `ConanSandbox/Saved/game.db`
+- **Modern Conan builds rename the save to `game_0.db`** (the `_0` is the save slot suffix). If `game.db` is missing or empty, check the same folder for `game_0.db` and point `GAME_DB_PATH` at that file instead.
+- For responsive Black Ice detection and raid alerts, lower `ServerSaveInterval` in `ServerSettings.ini` from the default `600` (10 minutes) to `60` so `game.db` is flushed every minute.
 
 **Items are not delivered after purchase**
 
