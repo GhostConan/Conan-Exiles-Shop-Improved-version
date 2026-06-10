@@ -169,24 +169,27 @@ async def _process_line(
         if not killer and cause.lower() == "none":
             return
         # When Conan does not capture the killer name (arrows, bombs, traps,
-        # explosions, poison, suicide), label the kill by CauseOfDeath instead
-        # of misattributing it to "Environment". This produces feed lines like:
-        #   "MUCKXSQUARE died (Combat – attacker unknown)"
-        #   "Haggy died (Poison)"
-        #   "asddsa died (Suicide)"
+        # explosions, poison, suicide), first try to resolve the real shooter
+        # from game.db's game_events table (eventType=103 is the PvP kill
+        # event and carries causerName=attacker, ownerName=victim). Only fall
+        # back to a CauseOfDeath label when no game.db match is found.
         if not killer or killer.lower() in ("self destructing", "none"):
-            cause_lower = cause.lower()
-            if cause_lower == "combat":
-                killer = "Unknown attacker"
-            elif cause_lower == "suicide":
-                killer = "Suicide"
-            elif cause_lower == "adminkill":
-                killer = "Admin"
-            elif cause_lower in ("none", ""):
-                killer = "Environment"
+            resolved = await _resolve_attacker_from_gamedb(srv, victim)
+            if resolved:
+                killer = resolved
             else:
-                # Falling, Drowning, Poison, Hunger, Thirst, Bleed, …
-                killer = cause.capitalize()
+                cause_lower = cause.lower()
+                if cause_lower == "combat":
+                    killer = "Unknown attacker"
+                elif cause_lower == "suicide":
+                    killer = "Suicide"
+                elif cause_lower == "adminkill":
+                    killer = "Admin"
+                elif cause_lower in ("none", ""):
+                    killer = "Environment"
+                else:
+                    # Falling, Drowning, Poison, Hunger, Thirst, Bleed, …
+                    killer = cause.capitalize()
         elif killer.lower() == "yourself":
             killer = "Suicide"
         await _handle_kill(bot, killer, victim, pool, srv)
@@ -634,3 +637,49 @@ async def _handle_disconnect(bot: commands.Bot, srv: ServerContext, name: str) -
         await chan.send(embed=embed)
     except Exception as exc:
         logger.warning("Could not post disconnect notice: {}", exc)
+
+# ── PvP attacker resolution via game.db ──────────────────────────────────────
+
+# eventType 103 = PvP kill in current Conan builds: ownerName is the victim,
+# causerName is the attacker. Confirmed on a live customer install (Vanerium)
+# where 277 such rows were attributed correctly. Other interesting eventTypes
+# observed in game_events for reference: 91/92/93/94 (damage), 88/99 (status
+# changes). Only 103 is the death event.
+_PVP_KILL_EVENT_TYPE = 103
+# Look back at most this many seconds in serverTime when matching a log-line
+# death to a game.db row. The watcher is real-time but game.db is only
+# flushed on the server save tick, so the matching row may not exist yet.
+_ATTACKER_LOOKBACK_SECONDS = 120
+
+
+async def _resolve_attacker_from_gamedb(srv: ServerContext, victim: str) -> str:
+    """Return the most recent attacker name from game_events for this victim,
+    or empty string if none found.
+
+    Best-effort: game.db is only flushed on the server save interval, so a
+    just-happened kill may not yet have a matching row. In that case the
+    caller falls back to a CauseOfDeath label.
+    """
+    if not victim:
+        return ""
+    try:
+        async with aiosqlite.connect(
+            f"file:{srv.game_db_path}?mode=ro", uri=True
+        ) as game_db:
+            async with game_db.execute(
+                "SELECT causerName FROM game_events "
+                "WHERE eventType = ? AND ownerName = ? AND causerName <> '' "
+                "ORDER BY rowid DESC LIMIT 1",
+                (_PVP_KILL_EVENT_TYPE, victim),
+            ) as rows:
+                row = await rows.fetchone()
+        if row and row[0]:
+            attacker = row[0].strip()
+            logger.debug(
+                "Killfeed: resolved unknown killer of '{}' to '{}' via game_events",
+                victim, attacker,
+            )
+            return attacker
+    except Exception as exc:
+        logger.debug("Could not resolve attacker for '{}': {}", victim, exc)
+    return ""
