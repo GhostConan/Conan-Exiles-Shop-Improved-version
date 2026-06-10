@@ -30,9 +30,10 @@ A fully asynchronous Discord bot for Conan Exiles dedicated servers. Combines an
 22. [Server Log Channel](#server-log-channel)
 23. [Raid Tracker](#raid-tracker)
 24. [Admin Panel](#admin-panel)
-25. [Adjusting Log Regexes](#adjusting-log-regexes)
-26. [Troubleshooting](#troubleshooting)
-27. [Tech Stack](#tech-stack)
+25. [Shrine Tracker](#shrine-tracker)
+26. [Adjusting Log Regexes](#adjusting-log-regexes)
+27. [Troubleshooting](#troubleshooting)
+28. [Tech Stack](#tech-stack)
 
 ---
 
@@ -806,6 +807,42 @@ Every successful action is mirrored as an embed to `SERVERLOG_CHANNEL_ID`. The e
 3. Runs the `restart` RCON verb.
 
 **Operator note (important):** The Conan `restart` RCON verb only STOPS the server process — it does not start a new one. For the server to actually come back up you must run it under a supervisor that relaunches it. With the official `DedicatedServerLauncher`, enable the **"Start server if not running"** checkbox; with systemd or a `.bat` loop the same applies. Without this, `/serverrestart` will leave the server offline until you start it manually.
+
+---
+
+## Shrine Tracker
+
+For events like Yog raids, the bot can track specific placeables (default: the Abyss of Yog T3 altar) per clan and announce destructions.
+
+Enable by setting in `.env`:
+
+```
+SHRINE_CHANNEL_ID=<discord_channel_id>
+SHRINE_CLASSES=/Game/Systems/Building/Placeables/BP_PL_Altar_Yog_T3.BP_PL_Altar_Yog_T3_C
+SHRINE_CHECK_INTERVAL_SECONDS=60
+```
+
+`SHRINE_CLASSES` is a CSV of full Blueprint paths. Add more to track other altars or placeables — for example the Mitra T3 altar:
+
+```
+SHRINE_CLASSES=/Game/Systems/Building/Placeables/BP_PL_Altar_Yog_T3.BP_PL_Altar_Yog_T3_C,/Game/Systems/Building/Placeables/BP_PL_Altar_Mitra_T3.BP_PL_Altar_Mitra_T3_C
+```
+
+To discover Blueprint paths from your live `game_0.db`:
+
+```sql
+SELECT DISTINCT class FROM actor_position
+WHERE class LIKE '%Altar%' OR class LIKE '%Shrine%';
+```
+
+### What it posts
+
+- **🏛️ Shrines per Clan** — a single pinned leaderboard embed in `SHRINE_CHANNEL_ID`, refreshed every cycle, showing each clan with the number of tracked shrines they own (sorted desc, top 25).
+- **💥 Shrine Destroyed** — posted whenever a previously tracked shrine disappears from `actor_position`. Includes the clan name, shrine type, the destroyer string from `destruction_history` (player name, "decay", etc.), and the world coordinates.
+
+State is persisted in MariaDB so destruction detection survives bot restarts:
+- `{sn}_shrine_tracked` — current set of known shrines
+- `{sn}_shrine_state` — the pinned leaderboard message id
 
 ---
 
