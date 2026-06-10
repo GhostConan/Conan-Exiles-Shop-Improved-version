@@ -83,6 +83,7 @@ class Settings(BaseSettings):
     # ── Discord role names ─────────────────────────────────────────────────────
     admin_role: str = "Admin"
     mod_role: str = "Moderator"
+    adminbot_role: str = "AdminBot"
     vip1_role: str = "VIP1"
     vip2_role: str = "VIP2"
     vip3_role: str = "VIP3"
