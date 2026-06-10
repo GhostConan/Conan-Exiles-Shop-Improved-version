@@ -205,8 +205,8 @@ async def _scan_damage_events(
             if names:
                 placeholders_n = ",".join("?" for _ in names)
                 async with game_db.execute(
-                    f"SELECT name, guild FROM characters "
-                    f"WHERE name IN ({placeholders_n}) AND guild IS NOT NULL AND guild != 0",
+                    f"SELECT char_name, guild FROM characters "
+                    f"WHERE char_name IN ({placeholders_n}) AND guild IS NOT NULL AND guild != 0",
                     names,
                 ) as rows:
                     for nrow in await rows.fetchall():
