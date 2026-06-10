@@ -95,6 +95,18 @@ class Settings(BaseSettings):
     firewall_enabled: bool = False
     firewall_blocklist_file: str = "blocklist.txt"
 
+    # ── Raid tracker ──────────────────────────────────────────────────────────
+    # Set RAID_ALERT_CHANNEL_ID to a Discord channel id to enable raid alerts.
+    # While a raid window is active (started via /raidstart), the bot polls
+    # building piece counts every RAID_CHECK_INTERVAL_SECONDS and posts an
+    # embed whenever a clan's loss since the previous post exceeds
+    # RAID_ALERT_THRESHOLD pieces. A per-clan cooldown of
+    # RAID_ALERT_COOLDOWN_SECONDS suppresses spam during long fights.
+    raid_alert_channel_id: int = 0
+    raid_alert_threshold: int = 10
+    raid_alert_cooldown_seconds: int = 60
+    raid_check_interval_seconds: int = 10
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
