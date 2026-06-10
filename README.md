@@ -142,6 +142,28 @@ cp .env.example .env
 
 Open `.env` in any text editor and fill in every value. See the [Configuration Reference](#configuration-reference) section for a full explanation of each setting.
 
+### Updating an existing install
+
+When new features land on master, pull the changes with the bundled updater (Windows / PowerShell). The script reads the GitHub Contents API (which always returns live content — `raw.githubusercontent.com` caches files for ~5 min and frequently serves stale copies), only rewrites files that actually changed, and clears Python's `__pycache__` so the next start picks up the new code.
+
+```powershell
+# Stop the bot first (Ctrl+C in its console)
+cd "<path to your install>"
+.\tools\update-bot.ps1
+.\start-bot.bat
+```
+
+The script never touches `.env`, MariaDB data, or any file outside the repo tree.
+
+To pin to a specific tag or branch:
+
+```powershell
+.\tools\update-bot.ps1 -Ref v1.2.0
+.\tools\update-bot.ps1 -Ref some-feature-branch
+```
+
+After a release that adds new env vars, diff your `.env` against `.env.example` and copy any new keys over. The default values are sensible — only the channel IDs and item template IDs that vary per install need attention.
+
 ---
 
 ## Configuration Reference
