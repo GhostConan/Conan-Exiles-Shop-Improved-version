@@ -107,8 +107,14 @@ class AdminPanelCog(commands.Cog, name="AdminPanel"):
     async def kick(self, interaction: discord.Interaction, player: str, reason: str = "Kicked by admin") -> None:
         await interaction.response.defer(ephemeral=True)
         srv = _get_srv(self.bot)
+        # Conan vanilla RCON syntax:
+        #   KickPlayer (index|name|userid|platformid|player) <id> <message>
+        # `player` accepts the in-game character name (this is the friendliest
+        # for admins typing names from the kill feed).
         try:
-            resp = await rcon_client.execute_for(srv, f'kick "{player}"')
+            resp = await rcon_client.execute_for(
+                srv, f'KickPlayer player "{player}" "{reason}"'
+            )
             await interaction.followup.send(
                 f"✅ Kicked **{player}**.\nReason: {reason}\n```{resp[:300]}```", ephemeral=True
             )
@@ -117,66 +123,77 @@ class AdminPanelCog(commands.Cog, name="AdminPanel"):
             await interaction.followup.send(f"❌ RCON error: {exc}", ephemeral=True)
 
     # ── /ban ──────────────────────────────────────────────────────────────────
-    @app_commands.command(name="ban", description="[ADMIN] Ban a player (kick + add to banlist).")
-    @app_commands.describe(player="Character name or platform ID", reason="Stored in audit log")
+    @app_commands.command(name="ban", description="[ADMIN] Ban a player from the server.")
+    @app_commands.describe(player="Character name or platform ID", reason="Shown to the player")
     @_admin_check()
     async def ban(self, interaction: discord.Interaction, player: str, reason: str = "Banned by admin") -> None:
         await interaction.response.defer(ephemeral=True)
         srv = _get_srv(self.bot)
-        # Conan supports both `BanPlayer "<name>"` and `kick <name>`. We attempt
-        # ban then fall back to kick + manual notice if the verb is rejected.
+        # Conan vanilla RCON: BanPlayer (index|name|userid|platformid|player) <id> <message>
         try:
-            resp = await rcon_client.execute_for(srv, f'BanPlayer "{player}"')
+            resp = await rcon_client.execute_for(
+                srv, f'BanPlayer player "{player}" "{reason}"'
+            )
+            await interaction.followup.send(
+                f"✅ Banned **{player}**.\nReason: {reason}\n```{resp[:300]}```", ephemeral=True
+            )
+            await _audit(self.bot, interaction.user, "Ban", f"**{player}** — {reason}")
         except Exception as exc:
-            try:
-                resp = await rcon_client.execute_for(srv, f'kick "{player}"')
-                resp = f"BanPlayer failed ({exc}); kicked instead.\n" + (resp or "")
-            except Exception as kexc:
-                await interaction.followup.send(f"❌ RCON error: {kexc}", ephemeral=True)
-                return
-        await interaction.followup.send(
-            f"✅ Banned **{player}**.\nReason: {reason}\n```{resp[:300]}```", ephemeral=True
-        )
-        await _audit(self.bot, interaction.user, "Ban", f"**{player}** — {reason}")
+            await interaction.followup.send(f"❌ RCON error: {exc}", ephemeral=True)
 
     # ── /unban ────────────────────────────────────────────────────────────────
-    @app_commands.command(name="unban", description="[ADMIN] Remove a player from the banlist.")
-    @app_commands.describe(player="Character name or platform ID")
+    @app_commands.command(name="unban", description="[ADMIN] Remove a player from the banlist (userid or platformid).")
+    @app_commands.describe(identifier="UserID or platform ID (NOT character name — see /listbans)")
     @_admin_check()
-    async def unban(self, interaction: discord.Interaction, player: str) -> None:
+    async def unban(self, interaction: discord.Interaction, identifier: str) -> None:
         await interaction.response.defer(ephemeral=True)
         srv = _get_srv(self.bot)
         try:
-            resp = await rcon_client.execute_for(srv, f'UnbanPlayer "{player}"')
-            await interaction.followup.send(f"✅ Unbanned **{player}**.\n```{resp[:300]}```", ephemeral=True)
-            await _audit(self.bot, interaction.user, "Unban", f"**{player}**")
+            resp = await rcon_client.execute_for(srv, f'UnbanPlayer {identifier}')
+            await interaction.followup.send(
+                f"✅ Unbanned `{identifier}`.\n```{resp[:300]}```", ephemeral=True
+            )
+            await _audit(self.bot, interaction.user, "Unban", f"`{identifier}`")
         except Exception as exc:
             await interaction.followup.send(f"❌ RCON error: {exc}", ephemeral=True)
 
-    # ── /mute, /unmute ────────────────────────────────────────────────────────
-    @app_commands.command(name="mute", description="[ADMIN] Mute a player in chat.")
-    @app_commands.describe(player="Character name or platform ID")
+    # ── /listbans ─────────────────────────────────────────────────────────────
+    @app_commands.command(name="listbans", description="[ADMIN] List banned players.")
     @_admin_check()
-    async def mute(self, interaction: discord.Interaction, player: str) -> None:
+    async def listbans(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True)
         srv = _get_srv(self.bot)
         try:
-            resp = await rcon_client.execute_for(srv, f'MutePlayer "{player}"')
-            await interaction.followup.send(f"✅ Muted **{player}**.\n```{resp[:300]}```", ephemeral=True)
-            await _audit(self.bot, interaction.user, "Mute", f"**{player}**")
+            resp = await rcon_client.execute_for(srv, "listbans")
+            text = resp or "_(empty)_"
+            await interaction.followup.send(f"```{text[:1800]}```", ephemeral=True)
         except Exception as exc:
             await interaction.followup.send(f"❌ RCON error: {exc}", ephemeral=True)
 
-    @app_commands.command(name="unmute", description="[ADMIN] Unmute a player.")
-    @app_commands.describe(player="Character name or platform ID")
+    # ── /whitelist, /unwhitelist ──────────────────────────────────────────────
+    @app_commands.command(name="whitelist", description="[ADMIN] Add a player to the whitelist.")
+    @app_commands.describe(identifier="UserID or platform ID")
     @_admin_check()
-    async def unmute(self, interaction: discord.Interaction, player: str) -> None:
+    async def whitelist(self, interaction: discord.Interaction, identifier: str) -> None:
         await interaction.response.defer(ephemeral=True)
         srv = _get_srv(self.bot)
         try:
-            resp = await rcon_client.execute_for(srv, f'UnmutePlayer "{player}"')
-            await interaction.followup.send(f"✅ Unmuted **{player}**.\n```{resp[:300]}```", ephemeral=True)
-            await _audit(self.bot, interaction.user, "Unmute", f"**{player}**")
+            resp = await rcon_client.execute_for(srv, f'WhitelistPlayer {identifier}')
+            await interaction.followup.send(f"✅ Whitelisted `{identifier}`.\n```{resp[:300]}```", ephemeral=True)
+            await _audit(self.bot, interaction.user, "Whitelist", f"`{identifier}`")
+        except Exception as exc:
+            await interaction.followup.send(f"❌ RCON error: {exc}", ephemeral=True)
+
+    @app_commands.command(name="unwhitelist", description="[ADMIN] Remove a player from the whitelist.")
+    @app_commands.describe(identifier="UserID or platform ID")
+    @_admin_check()
+    async def unwhitelist(self, interaction: discord.Interaction, identifier: str) -> None:
+        await interaction.response.defer(ephemeral=True)
+        srv = _get_srv(self.bot)
+        try:
+            resp = await rcon_client.execute_for(srv, f'UnWhitelistPlayer {identifier}')
+            await interaction.followup.send(f"✅ Removed `{identifier}` from whitelist.\n```{resp[:300]}```", ephemeral=True)
+            await _audit(self.bot, interaction.user, "UnWhitelist", f"`{identifier}`")
         except Exception as exc:
             await interaction.followup.send(f"❌ RCON error: {exc}", ephemeral=True)
 
@@ -524,10 +541,11 @@ class AdminPanelCog(commands.Cog, name="AdminPanel"):
             if remaining_seconds > 0:
                 await asyncio.sleep(remaining_seconds)
 
-            # Issue the shutdown. Vanilla Conan accepts `Shutdown`; some
-            # builds use `Quit`. Try both; if the DedicatedServerLauncher
-            # has "Start server if not running" enabled it will relaunch.
-            for cmd in ("Shutdown", "Quit"):
+            # Issue the restart. Vanilla Conan has `restart` (in-place restart
+            # without dropping the launcher process) and `Shutdown` (full quit
+            # — relies on DedicatedServerLauncher's "Start server if not
+            # running" to relaunch). Prefer `restart` for cleaner behaviour.
+            for cmd in ("restart", "Shutdown", "Quit"):
                 try:
                     await rcon_client.execute_for(srv, cmd)
                     logger.info("Server restart issued via RCON `{}` by {}", cmd, admin)
