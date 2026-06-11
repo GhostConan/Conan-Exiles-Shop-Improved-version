@@ -47,6 +47,7 @@ import discord
 from discord.ext import commands
 from loguru import logger
 
+from bot.utils.timeutil import now_utc, append_host_time_footer
 from bot.config import settings, ServerContext
 
 
@@ -425,7 +426,8 @@ async def watch_raid(pool: aiomysql.Pool, srv: ServerContext, bot: commands.Bot)
                             embed.add_field(name="Last damage", value=since_txt, inline=True)
                             embed.add_field(name="Pieces now", value=f"{now_pieces}", inline=True)
                             embed.set_footer(text=f"Server: {sn} — raid-time rebuild violation")
-                            embed.timestamp = now
+                            embed.timestamp = now_utc()
+                            if settings.timestamp_footer: append_host_time_footer(embed)
                             try:
                                 await serverlog_chan.send(embed=embed)
                                 last_rebuild_at = now
@@ -460,7 +462,8 @@ async def watch_raid(pool: aiomysql.Pool, srv: ServerContext, bot: commands.Bot)
                             embed.add_field(name="Lost since last alert", value=f"-{delta}", inline=True)
                             embed.add_field(name="Total lost this raid", value=f"-{total_lost}", inline=True)
                             embed.add_field(name="Pieces remaining", value=f"{now_pieces}", inline=True)
-                            embed.timestamp = now
+                            embed.timestamp = now_utc()
+                            if settings.timestamp_footer: append_host_time_footer(embed)
                             try:
                                 await raid_chan.send(embed=embed)
                                 last_at = now

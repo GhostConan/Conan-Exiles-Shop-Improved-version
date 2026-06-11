@@ -26,6 +26,7 @@ import discord
 from discord.ext import commands
 from loguru import logger
 
+from bot.utils.timeutil import now_utc, append_host_time_footer
 from bot.config import settings, ServerContext
 
 # Maximum clans to show per leaderboard
@@ -100,8 +101,8 @@ def _build_leaderboard_embed(
 ) -> discord.Embed:
     medals = ["🥇", "🥈", "🥉"]
     embed = discord.Embed(title=title, colour=colour)
-    embed.timestamp = datetime.utcnow()
-
+    embed.timestamp = now_utc()
+    if settings.timestamp_footer: append_host_time_footer(embed)
     lines = []
     for i, (name, count) in enumerate(rows):
         prefix = medals[i] if i < 3 else f"`{i+1:>2}.`"

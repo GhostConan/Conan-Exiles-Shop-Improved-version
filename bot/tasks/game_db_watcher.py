@@ -19,6 +19,7 @@ import discord
 from discord.ext import commands
 from loguru import logger
 
+from bot.utils.timeutil import now_utc, append_host_time_footer
 from bot.config import settings, ServerContext
 from bot import rcon as rcon_client
 
@@ -142,7 +143,8 @@ async def _check_jail(
                         colour=discord.Colour.green(),
                     )
                     embed.set_footer(text="Sentence completed")
-                    embed.timestamp = datetime.utcnow()
+                    embed.timestamp = now_utc()
+                    if settings.timestamp_footer: append_host_time_footer(embed)
                     await jail_chan.send(embed=embed)
                 except Exception as exc:
                     logger.warning("Could not post release notice: {}", exc)
@@ -191,7 +193,8 @@ async def _check_jail(
                             ),
                             colour=discord.Colour.red(),
                         )
-                        embed.timestamp = datetime.utcnow()
+                        embed.timestamp = now_utc()
+                        if settings.timestamp_footer: append_host_time_footer(embed)
                         await jail_chan.send(embed=embed)
                     except Exception as exc:
                         logger.warning("Could not post escape notice: {}", exc)

@@ -29,6 +29,7 @@ import discord
 from discord.ext import commands
 from loguru import logger
 
+from bot.utils.timeutil import now_utc, append_host_time_footer
 from bot.config import settings, ServerContext
 
 # ── Regex patterns ────────────────────────────────────────────────────────────
@@ -332,7 +333,8 @@ async def _handle_kill(
                     colour=discord.Colour.dark_red(),
                     description=f"**{killer}** killed **{victim}**",
                 )
-                embed.timestamp = now
+                embed.timestamp = now_utc()
+                if settings.timestamp_footer: append_host_time_footer(embed)
                 await chan.send(embed=embed)
             except Exception as exc:
                 logger.warning("Could not post kill log to Discord: {}", exc)
@@ -472,8 +474,8 @@ async def _notify_registration_success(
         ),
         colour=discord.Colour.green(),
     )
-    embed.timestamp = datetime.utcnow()
-
+    embed.timestamp = now_utc()
+    if settings.timestamp_footer: append_host_time_footer(embed)
     try:
         user = bot.get_user(int(discord_id)) or await bot.fetch_user(int(discord_id))
         await user.send(embed=embed)
@@ -564,7 +566,8 @@ async def _handle_connect(bot: commands.Bot, srv: ServerContext, name: str, ip: 
     )
     embed.add_field(name="IP", value=ip, inline=True)
     embed.add_field(name="SteamID", value="resolving…", inline=True)
-    embed.timestamp = datetime.utcnow()
+    embed.timestamp = now_utc()
+    if settings.timestamp_footer: append_host_time_footer(embed)
     try:
         msg = await chan.send(embed=embed)
         _session_info[key]["msg_id"] = str(msg.id)
@@ -590,7 +593,8 @@ async def _handle_be_register(
                 colour=discord.Colour.green(),
             )
             embed.add_field(name="SteamID", value=steamid, inline=True)
-            embed.timestamp = datetime.utcnow()
+            embed.timestamp = now_utc()
+            if settings.timestamp_footer: append_host_time_footer(embed)
             try:
                 await chan.send(embed=embed)
             except Exception as exc:
@@ -632,7 +636,8 @@ async def _handle_disconnect(bot: commands.Bot, srv: ServerContext, name: str) -
     )
     if info.get("steamid"):
         embed.add_field(name="SteamID", value=info["steamid"], inline=True)
-    embed.timestamp = datetime.utcnow()
+    embed.timestamp = now_utc()
+    if settings.timestamp_footer: append_host_time_footer(embed)
     try:
         await chan.send(embed=embed)
     except Exception as exc:

@@ -832,6 +832,22 @@ Every successful action is mirrored as an embed to `SERVERLOG_CHANNEL_ID`. The e
 
 ---
 
+## Embed Timestamps
+
+Every event embed posted by the bot uses a tz-aware UTC timestamp. Discord renders this in each viewer's local timezone automatically — so a moderator in Denver and a player in Madrid both see the correct local time for the same event.
+
+If you ever want the **host's wall-clock time** to show up explicitly (regardless of the viewer's locale), set in `.env`:
+
+```
+TIMESTAMP_FOOTER=true
+```
+
+Every embed footer then gets a `Server time: 2026-06-10 23:32:18 MDT` suffix appended (existing footer text is preserved). The native embed timestamp is unaffected.
+
+The host's local timezone abbreviation is read from the OS via Python's `datetime.now().astimezone()`. To change it, change the OS timezone — there is no per-bot timezone override.
+
+---
+
 ## Shrine Tracker
 
 For events like Yog raids, the bot can track specific placeables (default: the Abyss of Yog T3 altar) per clan and announce destructions.

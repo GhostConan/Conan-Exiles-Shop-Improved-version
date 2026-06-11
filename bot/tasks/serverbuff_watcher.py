@@ -19,6 +19,7 @@ from discord.ext import commands
 from loguru import logger
 
 from bot import rcon as rcon_client
+from bot.utils.timeutil import now_utc, append_host_time_footer
 from bot.config import settings, ServerContext
 
 
@@ -69,7 +70,8 @@ async def check_server_buffs(pool: aiomysql.Pool, srv: ServerContext, bot: comma
                                 description=f"**{buff_name}** has ended.",
                                 colour=discord.Colour.greyple(),
                             )
-                            embed.timestamp = datetime.utcnow()
+                            embed.timestamp = now_utc()
+                            if settings.timestamp_footer: append_host_time_footer(embed)
                             try:
                                 await chan.send(embed=embed)
                             except Exception as exc:

@@ -17,6 +17,7 @@ import discord
 from discord.ext import commands
 from loguru import logger
 
+from bot.utils.timeutil import now_utc, append_host_time_footer
 from bot.config import settings, ServerContext
 
 
@@ -61,7 +62,8 @@ async def check_vault_expiry(pool: aiomysql.Pool, srv: ServerContext, bot: comma
                         colour=discord.Colour.red(),
                         description=f"**{vault_name}** rented by {mention} has expired.",
                     )
-                    embed.timestamp = datetime.utcnow()
+                    embed.timestamp = now_utc()
+                    if settings.timestamp_footer: append_host_time_footer(embed)
                     await chan.send(embed=embed)
                 except Exception as exc:
                     logger.warning("Could not post vault expiry: {}", exc)
