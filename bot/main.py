@@ -101,6 +101,7 @@ async def main() -> None:
     from bot.tasks.firewall import apply_blocklist
     from bot.tasks.raid_watcher import watch_raid
     from bot.tasks.shrine_watcher import watch_shrines
+    from bot.tasks.kill_catchup import replay_missed_kills
 
     # ── APScheduler ───────────────────────────────────────────────────────────
     scheduler = AsyncIOScheduler(timezone="UTC")
@@ -204,6 +205,16 @@ async def main() -> None:
         logger.info("Logged in as {} (ID: {})", bot.user, bot.user.id)
         synced = await bot.tree.sync()
         logger.info("Synced {} slash commands", len(synced))
+
+        # Replay any kills that happened in game_events while the bot was
+        # offline. Runs once per server, advances a persistent cursor.
+        if settings.kill_catchup_max_replay > 0:
+            for srv in servers:
+                try:
+                    await replay_missed_kills(pool, srv, bot)
+                except Exception as exc:
+                    logger.error("Kill catch-up bootstrap failed [{}]: {}",
+                                 srv.server_name, exc)
 
     for cog in COGS:
         await bot.load_extension(cog)
