@@ -31,9 +31,12 @@ A fully asynchronous Discord bot for Conan Exiles dedicated servers. Combines an
 23. [Raid Tracker](#raid-tracker)
 24. [Admin Panel](#admin-panel)
 25. [Shrine Tracker](#shrine-tracker)
-26. [Adjusting Log Regexes](#adjusting-log-regexes)
-27. [Troubleshooting](#troubleshooting)
-28. [Tech Stack](#tech-stack)
+26. [Embed Timestamps](#embed-timestamps)
+27. [Kill Catch-Up After Downtime](#kill-catch-up-after-downtime)
+28. [Shop Kill-Switch](#shop-kill-switch)
+29. [Adjusting Log Regexes](#adjusting-log-regexes)
+30. [Troubleshooting](#troubleshooting)
+31. [Tech Stack](#tech-stack)
 
 ---
 
@@ -421,8 +424,8 @@ These commands require the Admin or Moderator Discord role configured in `.env`.
 | `/processblackice` | Manually triggers the Black Ice to Hardened Brick conversion cycle. |
 | `/wanted [player_name]` | Marks a player as wanted (level 3), or shows the current wanted list if no name is given. |
 | `/bounty <player_name> <amount>` | Sets a coin bounty on a player. |
-| `/shopclose [reason]` | Globally disables `/buy`. Players see a friendly "shop is closed" message (with the optional reason). Useful during the first days of a new server while players build up. |
-| `/shopopen` | Re-enables `/buy`. |
+| `/shopclose [reason]` | Globally disables `/buy`. Players see a friendly "shop is closed" message (with the optional reason). Useful during the first days of a new server while players build up. Accepts **Admin**, **Moderator**, **or AdminBot** role. |
+| `/shopopen` | Re-enables `/buy`. Accepts **Admin**, **Moderator**, **or AdminBot** role. |
 | `/addblock <ip_address>` | Adds an IP address or CIDR range to the firewall blocklist. Requires `FIREWALL_ENABLED=true`. |
 | `/removeblock <ip_address>` | Removes an IP address or CIDR range from the firewall blocklist. |
 
@@ -870,6 +873,31 @@ KILL_CATCHUP_MAX_REPLAY=500   # or 0 to disable
 ```
 
 What still does NOT replay (by design): chat lines, connect/disconnect events, `!register` chat commands, Black Ice chat drops. These are tail-only and recovered only by their respective game.db pollers (Black Ice via `inventory_watcher` is cumulative, so drops are still credited even without the chat line).
+
+---
+
+## Shop Kill-Switch
+
+For fresh servers it's common to keep the shop closed for the first few days so players build up resources before the economy goes live. Three slash commands manage this without touching `.env` or restarting the bot:
+
+| Command | Who | Description |
+|---|---|---|
+| `/shopclose [reason]` | Admin / Moderator / **AdminBot** | Globally disables `/buy`. Optional reason is shown to players who try to buy. |
+| `/shopopen` | Admin / Moderator / **AdminBot** | Re-enables `/buy`. |
+| `/shopstatus` | anyone | Shows whether the shop is open or closed, the optional reason, and a relative timestamp + Discord tag of who toggled it last. |
+
+When the shop is closed and a player runs `/buy`, they get an ephemeral reply such as:
+
+> 🚫 The shop is currently **closed**. Check back later.
+> Reason: *Shop opens once everyone has had a chance to build up — back in 3 days!*
+
+State is persisted in a new MariaDB table `bot_state` (key/value/updated_at/updated_by), so the toggle survives bot restarts. To peek at the state directly:
+
+```sql
+SELECT * FROM bot_state WHERE k IN ('shop_enabled', 'shop_closed_reason');
+```
+
+The kill-switch only affects `/buy`. `/balance`, `/shop` (browse), `/rentvault`, `/myvaults`, `/releasevault`, payroll, `/buy` for items already queued, Black Ice conversion, and all admin commands continue to work normally.
 
 ---
 
