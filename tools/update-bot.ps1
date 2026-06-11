@@ -61,7 +61,8 @@ function Get-RemoteTree {
 
 function Update-File {
     param([Parameter(Mandatory)] $RemoteItem)
-    $localPath = $RemoteItem.path -replace '/', '\'
+    $relPath   = $RemoteItem.path -replace '/', '\'
+    $localPath = Join-Path (Get-Location).Path $relPath
     $localDir  = Split-Path $localPath -Parent
     if ($localDir -and -not (Test-Path $localDir)) {
         New-Item -ItemType Directory -Force -Path $localDir | Out-Null
@@ -79,7 +80,7 @@ function Update-File {
 
     if ($changed) {
         [IO.File]::WriteAllBytes($localPath, $bytes)
-        Write-Host "  updated $localPath" -ForegroundColor Green
+        Write-Host "  updated $relPath" -ForegroundColor Green
         return 1
     } else {
         return 0
