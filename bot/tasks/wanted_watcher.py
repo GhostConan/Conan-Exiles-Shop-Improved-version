@@ -27,6 +27,7 @@ import discord
 from discord.ext import commands
 from loguru import logger
 
+from bot.utils.timeutil import now_utc, append_host_time_footer
 from bot.config import settings, ServerContext
 
 DEGRADE_AFTER_HOURS = 48
@@ -106,8 +107,8 @@ async def check_wanted(pool: aiomysql.Pool, srv: ServerContext, bot: commands.Bo
                 value += f"\nLast kill: <t:{int(last_kill.timestamp())}:R>"
             embed.add_field(name=player or "Unknown", value=value, inline=False)
 
-        embed.timestamp = datetime.utcnow()
-
+        embed.timestamp = now_utc()
+        if settings.timestamp_footer: append_host_time_footer(embed)
         # Upsert the wanted list message
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:

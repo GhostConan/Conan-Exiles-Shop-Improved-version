@@ -151,6 +151,14 @@ class Settings(BaseSettings):
     )
     shrine_check_interval_seconds: int = 60
 
+    # ── Embed timestamps ──────────────────────────────────────────────────────
+    # When TIMESTAMP_FOOTER=true, every event embed adds a "Server time:
+    # YYYY-MM-DD HH:MM:SS TZ" suffix to its footer so the host's wall-clock
+    # time is visible to every viewer regardless of their Discord locale.
+    # The native embed timestamp (rendered in each viewer's local TZ) is
+    # always set; this is purely additive.
+    timestamp_footer: bool = False
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

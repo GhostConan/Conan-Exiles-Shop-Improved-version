@@ -23,6 +23,7 @@ from discord.ext import commands
 from loguru import logger
 
 from bot import rcon as rcon_client
+from bot.utils.timeutil import now_utc, append_host_time_footer
 from bot.config import settings, ServerContext
 
 
@@ -70,7 +71,8 @@ async def _audit(bot: commands.Bot, admin: discord.User, action: str, detail: st
             colour=discord.Colour.blurple(),
         )
         embed.add_field(name="By", value=admin.mention, inline=True)
-        embed.timestamp = datetime.utcnow()
+        embed.timestamp = now_utc()
+        if settings.timestamp_footer: append_host_time_footer(embed)
         await chan.send(embed=embed)
     except Exception as exc:
         logger.warning("Could not post audit entry: {}", exc)
@@ -528,7 +530,8 @@ class AdminPanelCog(commands.Cog, name="AdminPanel"):
             ),
             colour=discord.Colour.orange(),
         )
-        embed.timestamp = datetime.utcnow()
+        embed.timestamp = now_utc()
+        if settings.timestamp_footer: append_host_time_footer(embed)
         await interaction.followup.send(embed=embed)
 
         # Launch the countdown in the background so the slash command can return.

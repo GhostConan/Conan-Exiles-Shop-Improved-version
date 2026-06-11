@@ -23,6 +23,7 @@ from discord import app_commands
 from discord.ext import commands
 from loguru import logger
 
+from bot.utils.timeutil import now_utc, append_host_time_footer
 from bot.config import settings
 
 
@@ -96,7 +97,8 @@ class RaidCog(commands.Cog, name="Raid"):
             inline=True,
         )
         embed.add_field(name="Started by", value=interaction.user.mention, inline=True)
-        embed.timestamp = datetime.now()
+        embed.timestamp = now_utc()
+        if settings.timestamp_footer: append_host_time_footer(embed)
         await interaction.followup.send(embed=embed)
         logger.info("Raid window opened by {} (auto-close: {})", interaction.user, ends_at)
 

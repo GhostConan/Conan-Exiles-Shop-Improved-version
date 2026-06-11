@@ -34,6 +34,7 @@ import discord
 from discord.ext import commands
 from loguru import logger
 
+from bot.utils.timeutil import now_utc, append_host_time_footer
 from bot.config import settings, ServerContext
 
 
@@ -156,7 +157,8 @@ def _build_leaderboard_embed(
     else:
         embed.add_field(name="Standings", value="*No shrines placed yet.*", inline=False)
     embed.set_footer(text=f"Server: {sn}")
-    embed.timestamp = datetime.now()
+    embed.timestamp = now_utc()
+    if settings.timestamp_footer: append_host_time_footer(embed)
     return embed
 
 
@@ -294,7 +296,8 @@ async def watch_shrines(pool: aiomysql.Pool, srv: ServerContext, bot: commands.B
                                 inline=True,
                             )
                         embed.set_footer(text=f"Server: {sn} — object {oid}")
-                        embed.timestamp = now
+                        embed.timestamp = now_utc()
+                        if settings.timestamp_footer: append_host_time_footer(embed)
                         try:
                             await chan.send(embed=embed)
                         except Exception as exc:

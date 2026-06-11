@@ -29,6 +29,7 @@ import discord
 from discord.ext import commands
 from loguru import logger
 
+from bot.utils.timeutil import now_utc, append_host_time_footer
 from bot.config import settings, ServerContext
 
 TOP_N = 15
@@ -213,7 +214,8 @@ def _solo_embed(rows: list, window: str) -> discord.Embed:
     else:
         embed.description = "_No kills recorded in this window yet._"
 
-    embed.timestamp = datetime.utcnow()
+    embed.timestamp = now_utc()
+    if settings.timestamp_footer: append_host_time_footer(embed)
     if settings.map_url:
         embed.add_field(name="Server Map", value=f"[View Map]({settings.map_url})", inline=False)
     return embed
@@ -238,7 +240,8 @@ def _clan_embed(rows: list, window: str) -> discord.Embed:
             "_Players must belong to a clan in-game (not just a `[TAG]` in their name)._"
         )
 
-    embed.timestamp = datetime.utcnow()
+    embed.timestamp = now_utc()
+    if settings.timestamp_footer: append_host_time_footer(embed)
     if settings.map_url:
         embed.add_field(name="Server Map", value=f"[View Map]({settings.map_url})", inline=False)
     return embed
