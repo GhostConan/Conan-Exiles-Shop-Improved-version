@@ -56,11 +56,12 @@ async def _set_state(cur, key: str, value: str, who: str) -> None:
 def _admin_check():
     async def predicate(interaction: discord.Interaction) -> bool:
         role_names = {r.name for r in getattr(interaction.user, "roles", [])}
-        if settings.admin_role in role_names or settings.mod_role in role_names:
+        allowed = {settings.admin_role, settings.mod_role, settings.adminbot_role}
+        if role_names & allowed:
             return True
         await interaction.response.send_message(
-            f"❌ This command requires the **{settings.admin_role}** "
-            f"or **{settings.mod_role}** role.",
+            f"❌ This command requires one of: **{settings.admin_role}**, "
+            f"**{settings.mod_role}**, or **{settings.adminbot_role}**.",
             ephemeral=True,
         )
         return False
