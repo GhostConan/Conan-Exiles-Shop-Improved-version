@@ -159,6 +159,13 @@ class Settings(BaseSettings):
     # always set; this is purely additive.
     timestamp_footer: bool = False
 
+    # ── Kill catch-up ─────────────────────────────────────────────────────────
+    # On bot startup, replay any PvP kills that happened in game.db.game_events
+    # while the bot was offline. KILL_CATCHUP_MAX_REPLAY caps the burst so a
+    # multi-day outage does not flood the kill channel; re-running the bot
+    # advances the cursor and replays the next batch. Set to 0 to disable.
+    kill_catchup_max_replay: int = 500
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

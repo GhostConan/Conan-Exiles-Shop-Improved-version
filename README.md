@@ -848,6 +848,28 @@ The host's local timezone abbreviation is read from the OS via Python's `datetim
 
 ---
 
+## Kill Catch-Up After Downtime
+
+If the bot is offline (crash, restart, server patch), the log tailer skips to the end of the log on restart so it never floods Discord with hours of stale chat. Kill events would normally be silently missed — except they are also recorded in `game.db.game_events` (eventType `103`) with attacker, victim, position and `serverTime`.
+
+On every bot startup, `bot/tasks/kill_catchup.py` reads any new rows from `game_events` since the last cursor and:
+
+- Inserts each missed kill into `{sn}_kill_log` so the kill leaderboards count it.
+- Posts a **⚔️ Kill (replayed)** embed to `KILLLOG_CHANNEL_ID` stamped with the *original* event time (so the timestamp Discord renders matches when the kill actually happened, not the catch-up moment).
+- Advances `{sn}_kill_catchup_state.last_event_rowid` to the highest replayed rowid so the next restart only sees newer events.
+
+On the very first ever run the cursor is seeded to the current `MAX(rowid)` so the full server history is NOT backfilled into Discord.
+
+A safety cap (`KILL_CATCHUP_MAX_REPLAY`, default 500) limits how many kills are posted per startup. If a long outage produced more than the cap, the first burst posts the cap and the next bot restart picks up where it left off. Raise the cap in `.env` if you want everything in one shot, or set to `0` to disable catch-up entirely.
+
+```
+KILL_CATCHUP_MAX_REPLAY=500   # or 0 to disable
+```
+
+What still does NOT replay (by design): chat lines, connect/disconnect events, `!register` chat commands, Black Ice chat drops. These are tail-only and recovered only by their respective game.db pollers (Black Ice via `inventory_watcher` is cumulative, so drops are still credited even without the chat line).
+
+---
+
 ## Shrine Tracker
 
 For events like Yog raids, the bot can track specific placeables (default: the Abyss of Yog T3 altar) per clan and announce destructions.
