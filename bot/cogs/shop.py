@@ -6,6 +6,9 @@ Slash commands for the in-game shop.
   /balance            — show your wallet balance
   /shop [category]    — browse available items
   /buy <item> [qty]   — purchase an item
+  /shopopen           — admin: re-enable /buy globally
+  /shopclose [reason] — admin: temporarily disable /buy globally
+  /shopstatus         — show current open/closed state
 """
 from __future__ import annotations
 
@@ -19,6 +22,49 @@ from discord.ext import commands
 from loguru import logger
 
 from bot.config import settings
+
+
+async def _ensure_state_table(cur) -> None:
+    await cur.execute(
+        "CREATE TABLE IF NOT EXISTS bot_state ("
+        "k VARCHAR(64) PRIMARY KEY, "
+        "v VARCHAR(255) NULL, "
+        "updated_at DATETIME NOT NULL, "
+        "updated_by VARCHAR(128) NULL"
+        ")"
+    )
+
+
+async def _get_state(cur, key: str, default: str = "") -> str:
+    await _ensure_state_table(cur)
+    await cur.execute("SELECT v FROM bot_state WHERE k = %s", (key,))
+    row = await cur.fetchone()
+    return row[0] if row and row[0] is not None else default
+
+
+async def _set_state(cur, key: str, value: str, who: str) -> None:
+    await _ensure_state_table(cur)
+    await cur.execute(
+        "INSERT INTO bot_state (k, v, updated_at, updated_by) "
+        "VALUES (%s, %s, %s, %s) "
+        "ON DUPLICATE KEY UPDATE v = VALUES(v), "
+        "updated_at = VALUES(updated_at), updated_by = VALUES(updated_by)",
+        (key, value, datetime.now(), who),
+    )
+
+
+def _admin_check():
+    async def predicate(interaction: discord.Interaction) -> bool:
+        role_names = {r.name for r in getattr(interaction.user, "roles", [])}
+        if settings.admin_role in role_names or settings.mod_role in role_names:
+            return True
+        await interaction.response.send_message(
+            f"❌ This command requires the **{settings.admin_role}** "
+            f"or **{settings.mod_role}** role.",
+            ephemeral=True,
+        )
+        return False
+    return app_commands.check(predicate)
 
 
 class ShopCog(commands.Cog, name="Shop"):
@@ -121,6 +167,18 @@ class ShopCog(commands.Cog, name="Shop"):
             await interaction.followup.send("❌ Quantity must be at least 1.", ephemeral=True)
             return
 
+        # ── Global shop kill-switch (admin-controlled via /shopclose) ─────
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                state = await _get_state(cur, "shop_enabled", "1")
+                reason = await _get_state(cur, "shop_closed_reason", "")
+        if state == "0":
+            msg = "🚫 The shop is currently **closed**. Check back later."
+            if reason:
+                msg += f"\nReason: *{reason}*"
+            await interaction.followup.send(msg, ephemeral=True)
+            return
+
         discord_id = str(interaction.user.id)
 
         async with self.pool.acquire() as conn:
@@ -202,6 +260,63 @@ class ShopCog(commands.Cog, name="Shop"):
             ephemeral=True,
         )
         logger.info("Purchase: {} bought {}× {} for {} (order {})", discord_id, quantity, name, total_cost, order_num)
+
+    # ── /shopclose ────────────────────────────────────────────────────────────
+    @app_commands.command(name="shopclose", description="[ADMIN] Temporarily disable the /buy command.")
+    @app_commands.describe(reason="Optional message shown to players who try to buy.")
+    @_admin_check()
+    async def shopclose(
+        self, interaction: discord.Interaction, reason: str = ""
+    ) -> None:
+        await interaction.response.defer(ephemeral=True)
+        who = f"{interaction.user} ({interaction.user.id})"
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await _set_state(cur, "shop_enabled", "0", who)
+                await _set_state(cur, "shop_closed_reason", reason or "", who)
+                await conn.commit()
+        msg = "🚫 Shop **closed**. `/buy` is disabled."
+        if reason:
+            msg += f"\nReason shown to players: *{reason}*"
+        await interaction.followup.send(msg, ephemeral=True)
+        logger.info("Shop closed by {} (reason: {!r})", who, reason)
+
+    # ── /shopopen ─────────────────────────────────────────────────────────────
+    @app_commands.command(name="shopopen", description="[ADMIN] Re-enable the /buy command.")
+    @_admin_check()
+    async def shopopen(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+        who = f"{interaction.user} ({interaction.user.id})"
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await _set_state(cur, "shop_enabled", "1", who)
+                await _set_state(cur, "shop_closed_reason", "", who)
+                await conn.commit()
+        await interaction.followup.send("✅ Shop **open**. `/buy` is enabled.", ephemeral=True)
+        logger.info("Shop opened by {}", who)
+
+    # ── /shopstatus ───────────────────────────────────────────────────────────
+    @app_commands.command(name="shopstatus", description="Show whether the shop is open or closed.")
+    async def shopstatus(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                state = await _get_state(cur, "shop_enabled", "1")
+                reason = await _get_state(cur, "shop_closed_reason", "")
+                await cur.execute(
+                    "SELECT updated_at, updated_by FROM bot_state WHERE k = 'shop_enabled'"
+                )
+                meta = await cur.fetchone()
+        if state == "0":
+            msg = "🚫 Shop is **closed**."
+            if reason:
+                msg += f"\nReason: *{reason}*"
+        else:
+            msg = "✅ Shop is **open**."
+        if meta:
+            updated_at, updated_by = meta
+            msg += f"\nLast change: <t:{int(updated_at.timestamp())}:R> by `{updated_by or 'unknown'}`"
+        await interaction.followup.send(msg, ephemeral=True)
 
 
 async def setup(bot: commands.Bot) -> None:

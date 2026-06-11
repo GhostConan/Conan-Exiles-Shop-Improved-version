@@ -401,6 +401,7 @@ docker compose logs --tail=100 bot
 | `/balance` | Shows your current coin balance. |
 | `/shop` | Lists all available shop items. Optionally filter by category: `/shop Weapons`. |
 | `/buy <item_name>` | Purchases an item. Delivery is automatic — instant if you are online, queued if offline. |
+| `/shopstatus` | Shows whether the shop is currently open or closed, and who toggled it last. |
 | `/listvaults` | Shows vaults available to rent and their daily price. |
 | `/rentvault <vault_name> <days>` | Rents a vault for 1 to 30 days. Cost is deducted immediately. |
 | `/myvaults` | Lists your active vault rentals and their expiration times. |
@@ -420,6 +421,8 @@ These commands require the Admin or Moderator Discord role configured in `.env`.
 | `/processblackice` | Manually triggers the Black Ice to Hardened Brick conversion cycle. |
 | `/wanted [player_name]` | Marks a player as wanted (level 3), or shows the current wanted list if no name is given. |
 | `/bounty <player_name> <amount>` | Sets a coin bounty on a player. |
+| `/shopclose [reason]` | Globally disables `/buy`. Players see a friendly "shop is closed" message (with the optional reason). Useful during the first days of a new server while players build up. |
+| `/shopopen` | Re-enables `/buy`. |
 | `/addblock <ip_address>` | Adds an IP address or CIDR range to the firewall blocklist. Requires `FIREWALL_ENABLED=true`. |
 | `/removeblock <ip_address>` | Removes an IP address or CIDR range from the firewall blocklist. |
 
