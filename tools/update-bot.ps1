@@ -3,13 +3,14 @@
     Updates an existing Conan Exiles Shop Bot install from GitHub master.
 
 .DESCRIPTION
-    Fetches the latest version of every Python source file in the bot/
-    directory via the GitHub Contents API (which always returns live
-    content, unlike raw.githubusercontent.com which caches for ~5 min),
-    clears Python bytecode caches, and prints a diff summary.
+    Downloads the repo as a single zipball (one HTTP request — avoids the
+    anonymous GitHub API 60/h rate limit), extracts it to a temp folder,
+    then copies bot/, tools/, README.md, .env.example and a few other root
+    files over the existing install. Clears Python's __pycache__ so the
+    next start picks up the new code.
 
-    Does NOT touch your .env file, MariaDB data, or anything outside
-    bot/, README.md, and .env.example.
+    Does NOT touch your .env file, MariaDB data, or anything outside the
+    repo tree.
 
 .PARAMETER Repo
     Owner/repo to pull from. Defaults to GhostConan/Conan-Exiles-Shop-Improved-version.
@@ -17,23 +18,28 @@
 .PARAMETER Ref
     Branch, tag or commit SHA. Defaults to master.
 
+.PARAMETER Token
+    Optional GitHub Personal Access Token. Authenticated requests get
+    5000/h rate limit instead of 60/h — useful if you update very often.
+
 .EXAMPLE
     .\tools\update-bot.ps1
-    # Pull every changed file from master into the current install.
 
 .EXAMPLE
     .\tools\update-bot.ps1 -Ref v1.2.0
-    # Pin to a specific tag.
+
+.EXAMPLE
+    .\tools\update-bot.ps1 -Token ghp_xxx
 
 .NOTES
     Run from the root of your bot install (the folder that contains
-    start-bot.bat and the bot/ directory). Stop the bot before running
-    so .pyc files can be cleaned safely.
+    start-bot.bat and bot/). Stop the bot first so .pyc files can be cleaned.
 #>
 [CmdletBinding()]
 param(
-    [string]$Repo = "GhostConan/Conan-Exiles-Shop-Improved-version",
-    [string]$Ref  = "master"
+    [string]$Repo  = "GhostConan/Conan-Exiles-Shop-Improved-version",
+    [string]$Ref   = "master",
+    [string]$Token = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -42,50 +48,15 @@ if (-not (Test-Path "bot")) {
     throw "bot/ directory not found. Run this script from the root of your install."
 }
 
-$apiBase = "https://api.github.com/repos/$Repo/contents"
+$installRoot = (Get-Location).Path
 $headers = @{ "User-Agent" = "conan-shop-updater" }
-
-function Get-RemoteTree {
-    param([string]$Path)
-    Write-Host "  scanning $Path ..." -ForegroundColor DarkGray
-    $url = "$apiBase/$Path`?ref=$Ref"
-    $items = Invoke-RestMethod -Uri $url -Headers $headers
-    foreach ($item in $items) {
-        if ($item.type -eq "file") {
-            $item
-        } elseif ($item.type -eq "dir") {
-            Get-RemoteTree -Path $item.path
-        }
-    }
+if ($Token) {
+    $headers["Authorization"] = "Bearer $Token"
 }
 
-function Update-File {
-    param([Parameter(Mandatory)] $RemoteItem)
-    $relPath   = $RemoteItem.path -replace '/', '\'
-    $localPath = Join-Path (Get-Location).Path $relPath
-    $localDir  = Split-Path $localPath -Parent
-    if ($localDir -and -not (Test-Path $localDir)) {
-        New-Item -ItemType Directory -Force -Path $localDir | Out-Null
-    }
-    $resp = Invoke-RestMethod -Uri $RemoteItem.url -Headers $headers
-    $bytes = [Convert]::FromBase64String($resp.content)
-
-    $changed = $true
-    if (Test-Path $localPath) {
-        $existing = [IO.File]::ReadAllBytes($localPath)
-        if ($existing.Length -eq $bytes.Length) {
-            $changed = -not ([Linq.Enumerable]::SequenceEqual($existing, $bytes))
-        }
-    }
-
-    if ($changed) {
-        [IO.File]::WriteAllBytes($localPath, $bytes)
-        Write-Host "  updated $relPath" -ForegroundColor Green
-        return 1
-    } else {
-        return 0
-    }
-}
+$tmpRoot = Join-Path $env:TEMP ("conan-shop-update-" + [Guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $tmpRoot | Out-Null
+$zipPath = Join-Path $tmpRoot "repo.zip"
 
 Write-Host ""
 Write-Host "Conan Shop Bot updater" -ForegroundColor Cyan
@@ -93,34 +64,81 @@ Write-Host "  repo: $Repo" -ForegroundColor Cyan
 Write-Host "  ref:  $Ref" -ForegroundColor Cyan
 Write-Host ""
 
-$pathsToSync = @("bot")
-$rootFiles   = @("README.md", ".env.example", "requirements.txt", "setup_db.py",
-                 "watchdog.py", "Dockerfile", "docker-compose.yml")
+# 1. Download the whole repo as one zip
+$zipUrl = "https://codeload.github.com/$Repo/zip/refs/heads/$Ref"
+Write-Host "Downloading $zipUrl ..." -ForegroundColor Yellow
+try {
+    Invoke-WebRequest -Uri $zipUrl -Headers $headers -OutFile $zipPath
+} catch {
+    # Fall back to API zipball endpoint (works for tags/SHAs too)
+    Write-Host "  codeload failed, trying API zipball..." -ForegroundColor DarkGray
+    $apiZip = "https://api.github.com/repos/$Repo/zipball/$Ref"
+    Invoke-WebRequest -Uri $apiZip -Headers $headers -OutFile $zipPath
+}
 
+# 2. Extract
+Write-Host "Extracting..." -ForegroundColor Yellow
+Expand-Archive -Path $zipPath -DestinationPath $tmpRoot -Force
+$extracted = Get-ChildItem -Path $tmpRoot -Directory | Where-Object { $_.Name -ne $tmpRoot } | Select-Object -First 1
+if (-not $extracted) {
+    throw "Could not find extracted repo root inside $tmpRoot"
+}
+$srcRoot = $extracted.FullName
+
+# 3. Mirror bot/ and tools/, plus selected root files
 $changed = 0
+function Copy-IfChanged {
+    param([string]$Src, [string]$Dest)
+    $bytes = [IO.File]::ReadAllBytes($Src)
+    $write = $true
+    if (Test-Path $Dest) {
+        $existing = [IO.File]::ReadAllBytes($Dest)
+        if ($existing.Length -eq $bytes.Length -and [Linq.Enumerable]::SequenceEqual($existing, $bytes)) {
+            $write = $false
+        }
+    }
+    if ($write) {
+        $destDir = Split-Path $Dest -Parent
+        if ($destDir -and -not (Test-Path $destDir)) {
+            New-Item -ItemType Directory -Force -Path $destDir | Out-Null
+        }
+        [IO.File]::WriteAllBytes($Dest, $bytes)
+        $rel = $Dest.Substring($installRoot.Length).TrimStart('\','/')
+        Write-Host "  updated $rel" -ForegroundColor Green
+        return 1
+    }
+    return 0
+}
 
-Write-Host "Walking remote bot/ tree..." -ForegroundColor Yellow
-foreach ($p in $pathsToSync) {
-    foreach ($item in Get-RemoteTree -Path $p) {
-        $changed += Update-File -RemoteItem $item
+Write-Host "Syncing bot/ and tools/ trees..." -ForegroundColor Yellow
+foreach ($sub in @("bot", "tools")) {
+    $srcSub = Join-Path $srcRoot $sub
+    if (-not (Test-Path $srcSub)) { continue }
+    Get-ChildItem -Path $srcSub -Recurse -File | ForEach-Object {
+        $rel  = $_.FullName.Substring($srcRoot.Length).TrimStart('\','/')
+        $dest = Join-Path $installRoot $rel
+        $changed += Copy-IfChanged -Src $_.FullName -Dest $dest
     }
 }
 
-Write-Host ""
-Write-Host "Syncing root files..." -ForegroundColor Yellow
+Write-Host "Syncing selected root files..." -ForegroundColor Yellow
+$rootFiles = @("README.md", ".env.example", "requirements.txt", "setup_db.py",
+               "watchdog.py", "Dockerfile", "docker-compose.yml", "conan-shop.service")
 foreach ($f in $rootFiles) {
-    try {
-        $resp = Invoke-RestMethod -Uri "$apiBase/$f`?ref=$Ref" -Headers $headers
-        $changed += Update-File -RemoteItem $resp
-    } catch {
-        Write-Host "  skipped $f (not in repo)" -ForegroundColor DarkGray
+    $src = Join-Path $srcRoot $f
+    if (Test-Path $src) {
+        $dest = Join-Path $installRoot $f
+        $changed += Copy-IfChanged -Src $src -Dest $dest
     }
 }
 
-Write-Host ""
+# 4. Clear bytecode cache
 Write-Host "Clearing Python bytecode cache..." -ForegroundColor Yellow
-Get-ChildItem -Path "bot" -Recurse -Include "__pycache__" -ErrorAction SilentlyContinue |
+Get-ChildItem -Path (Join-Path $installRoot "bot") -Recurse -Include "__pycache__" -ErrorAction SilentlyContinue |
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
+# 5. Clean up the temp zip + extracted tree
+Remove-Item -Path $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
 
 Write-Host ""
 if ($changed -eq 0) {
