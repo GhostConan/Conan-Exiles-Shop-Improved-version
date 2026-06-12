@@ -75,12 +75,39 @@ async def replay_missed_kills(
         return
 
     cap = max(1, int(getattr(settings, "kill_catchup_max_replay", 500)))
+    enabled = bool(getattr(settings, "kill_catchup_enabled", True))
 
     try:
         async with pool.acquire() as conn:
             async with conn.cursor() as cur:
                 await cur.execute("SET NAMES utf8mb4")
                 await _ensure_tables(cur, sn)
+
+                # When disabled: seed/advance cursor to current MAX(rowid) and
+                # exit. This keeps the cursor "fresh" so re-enabling later does
+                # not dump every kill since install.
+                if not enabled:
+                    async with aiosqlite.connect(
+                        f"file:{srv.game_db_path}?mode=ro", uri=True
+                    ) as game_db:
+                        async with game_db.execute(
+                            "SELECT IFNULL(MAX(rowid), 0) FROM game_events"
+                        ) as rows:
+                            max_row = await rows.fetchone()
+                    seed = int(max_row[0]) if max_row and max_row[0] is not None else 0
+                    await cur.execute(
+                        f"INSERT INTO {sn}_kill_catchup_state "
+                        "(id, last_event_rowid) VALUES (1, %s) "
+                        "ON DUPLICATE KEY UPDATE last_event_rowid = VALUES(last_event_rowid)",
+                        (seed,),
+                    )
+                    await conn.commit()
+                    logger.info(
+                        "Kill catch-up [{}]: disabled, cursor advanced to {} (no replay)",
+                        sn, seed,
+                    )
+                    return
+
                 await cur.execute(
                     f"SELECT last_event_rowid FROM {sn}_kill_catchup_state WHERE id = 1"
                 )
