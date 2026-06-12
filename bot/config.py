@@ -166,6 +166,15 @@ class Settings(BaseSettings):
     # advances the cursor and replays the next batch. Set to 0 to disable.
     kill_catchup_max_replay: int = 500
 
+    # ── Building piece tracking ───────────────────────────────────────────────
+    # SQL LIKE pattern applied to building_instances.class when materialising
+    # the per-clan piece count into {sn}_building_piece_tracking. Filters out
+    # non-structural placeables (bombs, orbs, traps, banners, torches,
+    # bedrolls, etc.) so the count — and the raid rebuild detector — only
+    # respond to real building pieces. Default catches every BP_Build* class
+    # on current Conan builds. Override if a future patch renames things.
+    building_piece_class_like: str = "%BP_Build%"
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

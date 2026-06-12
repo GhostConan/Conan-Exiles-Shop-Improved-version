@@ -1003,6 +1003,7 @@ Replace `YOUR_SERVER_ID` with your Discord server's ID. To find it: right-click 
 - On a live server, `game.db` is usually located at: `ConanSandbox/Saved/game.db`
 - **Modern Conan builds rename the save to `game_0.db`** (the `_0` is the save slot suffix). If `game.db` is missing or empty, check the same folder for `game_0.db` and point `GAME_DB_PATH` at that file instead.
 - For responsive Black Ice detection and raid alerts, lower `ServerSaveInterval` in `ServerSettings.ini` from the default `600` (10 minutes) to `60` so `game.db` is flushed every minute.
+- **Non-structural placeables (bombs, orbs, traps, banners, torches, bedrolls) are excluded from the per-clan building piece count** via an SQL `LIKE` filter on `building_instances.class` (default `BUILDING_PIECE_CLASS_LIKE=%BP_Build%`). This is the source of truth for raid-tracker rebuild alerts and the building leaderboard — so e.g. placing an explosive jar near an enemy base will not trigger a "Rebuild During Raid" embed. Override the LIKE pattern in `.env` if a future Conan patch renames structural classes.
 
 **Items are not delivered after purchase**
 
