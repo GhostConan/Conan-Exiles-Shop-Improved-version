@@ -38,16 +38,25 @@ async def watch_game_db(pool: aiomysql.Pool, srv: ServerContext, bot: commands.B
                     game_db.row_factory = aiosqlite.Row
 
                     # ── 1. Building piece tracking ────────────────────────────
+                    # Filter out non-structural placeables (bombs, orbs, traps,
+                    # banners, torches, bedrolls, etc.) so the count reflects
+                    # only real building pieces. Conan structural classes all
+                    # share a common prefix; tune via BUILDING_PIECE_CLASS_LIKE
+                    # if a future patch changes the naming.
+                    bp_filter = settings.building_piece_class_like
                     async with game_db.execute(
                         """
                         SELECT g.guildid, g.name,
-                               COUNT() AS piece_count
+                               COUNT(bi.instance_id) AS piece_count
                         FROM guilds g
-                        LEFT JOIN buildings b       ON b.owner_id = g.guildId
-                        LEFT JOIN building_instances bi ON bi.object_id = b.object_id
+                        LEFT JOIN buildings b ON b.owner_id = g.guildId
+                        LEFT JOIN building_instances bi
+                            ON bi.object_id = b.object_id
+                            AND bi.class LIKE ?
                         GROUP BY g.guildid
                         ORDER BY piece_count DESC
-                        """
+                        """,
+                        (bp_filter,),
                     ) as rows:
                         clan_data = await rows.fetchall()
 
