@@ -175,6 +175,13 @@ class Settings(BaseSettings):
     # on current Conan builds. Override if a future patch renames things.
     building_piece_class_like: str = "%BP_Build%"
 
+    # How often the game.db -> MariaDB materialiser runs. This is what feeds
+    # per-clan piece counts (rebuild detection) and the building leaderboard.
+    # Default 60s is fine for most servers; lower values (e.g. 5) make rebuild
+    # detection snappier but require ServerSaveInterval in Conan to be set
+    # equally low or the underlying game.db won't have refreshed yet.
+    game_db_watcher_interval_seconds: int = 60
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

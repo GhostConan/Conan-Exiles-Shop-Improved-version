@@ -159,7 +159,8 @@ async def main() -> None:
     for srv in servers:
         sn = srv.server_name
         scheduler.add_job(
-            watch_game_db, "interval", minutes=1,
+            watch_game_db, "interval",
+            seconds=settings.game_db_watcher_interval_seconds,
             args=[pool, srv, bot], id=f"gamedb_{sn}", misfire_grace_time=60,
         )
         scheduler.add_job(
