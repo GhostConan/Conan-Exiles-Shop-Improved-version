@@ -165,6 +165,8 @@ def _build_leaderboard_embed(
 async def _refresh_leaderboard(
     cur, sn: str, bot: commands.Bot, embed: discord.Embed,
 ) -> None:
+    """Post a fresh leaderboard each cycle and delete the previous one so the
+    standings always live at the bottom of the channel without piling up."""
     chan = bot.get_channel(settings.shrine_channel_id)
     if chan is None:
         return
@@ -172,36 +174,32 @@ async def _refresh_leaderboard(
         f"SELECT leaderboard_message_id FROM {sn}_shrine_state WHERE id = 1"
     )
     row = await cur.fetchone()
-    msg_id = int(row[0]) if row and row[0] else 0
-
-    msg = None
-    if msg_id:
-        try:
-            msg = await chan.fetch_message(msg_id)
-        except Exception:
-            msg = None
-
-    if msg is not None:
-        try:
-            await msg.edit(embed=embed)
-            return
-        except Exception as exc:
-            logger.warning("Shrine watcher: could not edit leaderboard, reposting: {}", exc)
+    prev_id = int(row[0]) if row and row[0] else 0
 
     try:
         new_msg = await chan.send(embed=embed)
-        await cur.execute(
-            f"INSERT INTO {sn}_shrine_state (id, leaderboard_message_id) "
-            "VALUES (1, %s) "
-            "ON DUPLICATE KEY UPDATE leaderboard_message_id = VALUES(leaderboard_message_id)",
-            (new_msg.id,),
-        )
-        try:
-            await new_msg.pin()
-        except Exception:
-            pass
     except Exception as exc:
         logger.warning("Shrine watcher: could not post leaderboard: {}", exc)
+        return
+
+    await cur.execute(
+        f"INSERT INTO {sn}_shrine_state (id, leaderboard_message_id) "
+        "VALUES (1, %s) "
+        "ON DUPLICATE KEY UPDATE leaderboard_message_id = VALUES(leaderboard_message_id)",
+        (new_msg.id,),
+    )
+
+    if prev_id:
+        try:
+            prev = await chan.fetch_message(prev_id)
+            if prev.pinned:
+                try:
+                    await prev.unpin()
+                except Exception:
+                    pass
+            await prev.delete()
+        except Exception:
+            pass  # message already gone / no perms / etc.
 
 
 async def watch_shrines(pool: aiomysql.Pool, srv: ServerContext, bot: commands.Bot) -> None:
