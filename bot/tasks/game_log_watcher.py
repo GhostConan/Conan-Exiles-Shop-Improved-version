@@ -163,11 +163,35 @@ async def _process_line(
         # noise. The IsThrall flag from the log line is authoritative.
         if isthrall:
             return
-        # Skip wildlife / NPC-vs-NPC noise (otherwise the kill feed channel is
-        # flooded with "Vulture was killed by Spider" every few seconds). Only
-        # forward kills where the victim is a player character.
-        if internal.startswith("BP_NPC_") or internal.startswith("BP_Wildlife_"):
+        # Skip world NPCs / wildlife. Faction camp humanoids (Cimmerian
+        # Fighter, Nordheimer Archer, Stygian Cook, etc.) come through
+        # with IsThrall=0 because they belong to the world, not a player
+        # thrall pool. Their internal class is HumanoidNPCCharacter_C_*.
+        # Wildlife uses BP_Wildlife_*; older NPC blueprints use BP_NPC_*.
+        if (
+            internal.startswith("HumanoidNPCCharacter")
+            or internal.startswith("BP_NPC_")
+            or internal.startswith("BP_Wildlife_")
+            or internal.startswith("BP_Animal_")
+            or internal.startswith("BP_Pet_")
+            or internal.startswith("BP_Mount_")
+        ):
             return
+        # Skip non-PvP causes of death entirely when configured to do so.
+        # Falling, drowning, hunger, thirst, bleed, poison, suicide, etc.
+        # are not player-vs-player kills and clutter the feed. Combat,
+        # adminkill, and unknown/empty causes still flow through (the
+        # latter typically means "killed by arrow/explosion" which IS PvP
+        # — we resolve the attacker from game_events below).
+        if settings.killfeed_pvp_only:
+            non_pvp_causes = {
+                "falling", "fall", "drowning", "drown", "hunger",
+                "thirst", "starvation", "bleed", "bleeding", "poison",
+                "burning", "burn", "fire", "frostbite", "freeze",
+                "corruption", "acid", "sandstorm", "purge",
+            }
+            if cause.lower() in non_pvp_causes:
+                return
         # Skip logout / respawn artifacts. Conan emits the same
         # KillCharacterWithRagdoll line with empty KillerNameInput AND
         # CauseOfDeath=None when a player logs out, character is restored,
