@@ -246,6 +246,16 @@ async def _process_line(
             "corruption", "acid", "sandstorm", "purge",
         ):
             return
+        # Drop NPC killers. When a Darfari Sorcerer or Siptah surge thrall
+        # kills a player, Conan logs the NPC's internal class name as the
+        # killer (e.g. NPC_PREFIX_Darfari_Cannibals_Sorcerer_3_Darfari).
+        # In pvp-only mode the killer MUST be a known player char name —
+        # everything else (NPCs, environment, surge thralls, etc.) is
+        # filtered out. This is the only future-proof way to do it: any new
+        # NPC class added by a DLC will be rejected automatically.
+        if settings.killfeed_pvp_only:
+            if not await _is_player_char(srv, killer):
+                return
         await _handle_kill(bot, killer, victim, pool, srv)
         return
 
@@ -708,6 +718,43 @@ _PVP_KILL_EVENT_TYPE = 103
 # death to a game.db row. The watcher is real-time but game.db is only
 # flushed on the server save tick, so the matching row may not exist yet.
 _ATTACKER_LOOKBACK_SECONDS = 120
+
+
+# Cache of known player character names, refreshed every _PLAYER_CACHE_TTL
+# seconds from game.db. Used by the kill feed to decide whether a name is
+# a real player or an NPC class string. Cached because the live log
+# watcher fires for every kill line.
+_player_name_cache: dict[str, tuple[set[str], float]] = {}
+_PLAYER_CACHE_TTL = 60.0
+
+
+async def _is_player_char(srv: ServerContext, name: str) -> bool:
+    """Return True if `name` is a known player character on this server."""
+    if not name:
+        return False
+    import time
+    cached = _player_name_cache.get(srv.server_name)
+    if not cached or (time.monotonic() - cached[1]) > _PLAYER_CACHE_TTL:
+        names: set[str] = set()
+        try:
+            async with aiosqlite.connect(
+                f"file:{srv.game_db_path}?mode=ro", uri=True
+            ) as game_db:
+                async with game_db.execute(
+                    "SELECT ch.char_name FROM characters ch "
+                    "JOIN account a ON a.id = ch.playerid "
+                    "WHERE ch.char_name IS NOT NULL AND ch.char_name <> ''"
+                ) as rows:
+                    async for r in rows:
+                        names.add(str(r[0]).strip())
+        except Exception as exc:
+            logger.debug("Could not refresh player name cache [{}]: {}", srv.server_name, exc)
+            # If we can't load the cache, allow the name through (fail open
+            # so a transient DB issue doesn't drop legit PvP kills).
+            return True
+        _player_name_cache[srv.server_name] = (names, time.monotonic())
+        cached = _player_name_cache[srv.server_name]
+    return name in cached[0]
 
 
 async def _resolve_attacker_from_gamedb(srv: ServerContext, victim: str) -> str:
