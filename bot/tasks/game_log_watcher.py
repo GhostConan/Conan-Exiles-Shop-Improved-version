@@ -155,6 +155,14 @@ async def _process_line(
         victim = m.group("victim").strip()
         internal = m.group("internal")
         cause = m.group("cause").strip()
+        isthrall = m.group("isthrall") == "1"
+        # Skip thrall / pet / follower deaths. Conan emits the same
+        # KillCharacterWithRagdoll line whenever a thrall is killed (raid
+        # NPCs, defender thralls, pets, mounts). Without this filter the
+        # kill feed gets flooded with "Player killed Stygian Fighter II"
+        # noise. The IsThrall flag from the log line is authoritative.
+        if isthrall:
+            return
         # Skip wildlife / NPC-vs-NPC noise (otherwise the kill feed channel is
         # flooded with "Vulture was killed by Spider" every few seconds). Only
         # forward kills where the victim is a player character.
