@@ -146,6 +146,25 @@ async def replay_missed_kills(
                     ) as rows:
                         events = await rows.fetchall()
 
+                    # Build the set of known player character names so we can
+                    # skip thrall / pet / NPC kills that share eventType 103.
+                    # Player chars are rows in `characters` joined to an
+                    # `account` (i.e. tied to a real platform user).
+                    player_names: set[str] = set()
+                    try:
+                        async with game_db.execute(
+                            "SELECT DISTINCT ch.char_name FROM characters ch "
+                            "JOIN account a ON a.id = ch.playerid "
+                            "WHERE ch.char_name IS NOT NULL AND ch.char_name <> ''"
+                        ) as rows:
+                            async for r in rows:
+                                player_names.add(str(r[0]).strip())
+                    except Exception as exc:
+                        logger.warning(
+                            "Kill catch-up [{}]: could not load player names "
+                            "for thrall filter: {}", sn, exc,
+                        )
+
                 if not events:
                     logger.debug("Kill catch-up [{}]: nothing to replay", sn)
                     return
@@ -164,6 +183,14 @@ async def replay_missed_kills(
                     victim = (victim or "").strip()
                     killer = (killer or "").strip()
                     if not victim:
+                        continue
+
+                    # Skip thralls / pets / NPCs. If we managed to load the
+                    # player list and the victim is not on it, the kill was
+                    # not a real PvP death. Empty player_names means the
+                    # lookup failed, so fall through to the old behaviour
+                    # rather than swallow every event silently.
+                    if player_names and victim not in player_names:
                         continue
 
                     try:
