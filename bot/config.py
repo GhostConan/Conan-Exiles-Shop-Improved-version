@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     discord_token: str
     serverlog_channel_id: int = 0
     killlog_channel_id: int = 0
+    # When true, the kill feed only posts genuine player-vs-player kills.
+    # Falling, drowning, hunger, poison, suicide, etc. are suppressed.
+    # World NPCs (Cimmerian/Stygian/Nordheimer faction camps, wildlife,
+    # pets, mounts) are always suppressed regardless of this flag.
+    killfeed_pvp_only: bool = True
     items_for_sale_channel_id: int = 0
     server_buffs_channel_id: int = 0
     jail_channel_id: int = 0
