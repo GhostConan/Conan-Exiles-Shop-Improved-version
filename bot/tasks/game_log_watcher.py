@@ -170,11 +170,14 @@ async def _process_line(
         # Wildlife uses BP_Wildlife_*; older NPC blueprints use BP_NPC_*.
         if (
             internal.startswith("HumanoidNPCCharacter")
+            or internal.startswith("NPC_PREFIX_")
             or internal.startswith("BP_NPC_")
             or internal.startswith("BP_Wildlife_")
             or internal.startswith("BP_Animal_")
             or internal.startswith("BP_Pet_")
             or internal.startswith("BP_Mount_")
+            or "Wildlife_" in internal
+            or "_Siptah_" in internal
         ):
             return
         # Skip non-PvP causes of death entirely when configured to do so.
@@ -189,6 +192,7 @@ async def _process_line(
                 "thirst", "starvation", "bleed", "bleeding", "poison",
                 "burning", "burn", "fire", "frostbite", "freeze",
                 "corruption", "acid", "sandstorm", "purge",
+                "suicide", "selfdestruct", "self_destruct",
             }
             if cause.lower() in non_pvp_causes:
                 return
@@ -225,6 +229,23 @@ async def _process_line(
                     killer = cause.capitalize()
         elif killer.lower() == "yourself":
             killer = "Suicide"
+        # After resolution: if pvp-only is on and we ended up with a
+        # synthetic / non-player killer label, drop the kill. These are
+        # environment / suicide / admin events that we don't want in the
+        # feed even after game_events lookup couldn't find a real attacker.
+        if settings.killfeed_pvp_only and killer in (
+            "Suicide", "Environment", "Admin", "Unknown attacker",
+        ):
+            return
+        # Also drop synthesised environment labels (Falling, Drowning, …)
+        # that fell through the cause-of-death branch above.
+        if settings.killfeed_pvp_only and killer.lower() in (
+            "falling", "fall", "drowning", "drown", "hunger",
+            "thirst", "starvation", "bleed", "bleeding", "poison",
+            "burning", "burn", "fire", "frostbite", "freeze",
+            "corruption", "acid", "sandstorm", "purge",
+        ):
+            return
         await _handle_kill(bot, killer, victim, pool, srv)
         return
 
