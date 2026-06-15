@@ -171,6 +171,11 @@ class Settings(BaseSettings):
     # dump the whole backlog). KILL_CATCHUP_MAX_REPLAY caps each burst.
     kill_catchup_enabled: bool = True
     kill_catchup_max_replay: int = 500
+    # When true, kill catch-up replays missed kills into the DB silently
+    # (still updates kill_log + streaks + leaderboards) without posting
+    # "⚔️ Kill (replayed)" embeds to the kill feed channel. Default true
+    # because the catch-up embeds tend to spam after long downtime.
+    kill_catchup_silent: bool = True
 
     # ── Building piece tracking ───────────────────────────────────────────────
     # SQL LIKE pattern applied to building_instances.class when materialising
