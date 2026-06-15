@@ -246,15 +246,15 @@ async def _process_line(
             "corruption", "acid", "sandstorm", "purge",
         ):
             return
-        # Drop NPC killers. When a Darfari Sorcerer or Siptah surge thrall
-        # kills a player, Conan logs the NPC's internal class name as the
-        # killer (e.g. NPC_PREFIX_Darfari_Cannibals_Sorcerer_3_Darfari).
-        # In pvp-only mode the killer MUST be a known player char name —
-        # everything else (NPCs, environment, surge thralls, etc.) is
-        # filtered out. This is the only future-proof way to do it: any new
-        # NPC class added by a DLC will be rejected automatically.
+        # Drop NPC killers AND NPC victims. In pvp-only mode, both sides
+        # of the kill must be known player character names. Self-kills
+        # (killer == victim) are also dropped — they're never interesting.
         if settings.killfeed_pvp_only:
+            if killer.strip().lower() == victim.strip().lower():
+                return
             if not await _is_player_char(srv, killer):
+                return
+            if not await _is_player_char(srv, victim):
                 return
         await _handle_kill(bot, killer, victim, pool, srv)
         return

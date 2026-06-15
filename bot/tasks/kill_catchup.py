@@ -211,7 +211,7 @@ async def replay_missed_kills(
                          kill_x, kill_y, kill_ts),
                     )
 
-                    if chan is not None:
+                    if chan is not None and not settings.kill_catchup_silent:
                         try:
                             kill_ts_utc = kill_ts.astimezone(timezone.utc) \
                                 if kill_ts.tzinfo else kill_ts.replace(tzinfo=timezone.utc)
@@ -258,7 +258,7 @@ async def replay_missed_kills(
                     )
                 logger.info(msg)
 
-                if truncated and chan is not None:
+                if truncated and chan is not None and not settings.kill_catchup_silent:
                     try:
                         await chan.send(
                             embed=discord.Embed(
