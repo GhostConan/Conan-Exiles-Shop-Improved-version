@@ -80,6 +80,11 @@ class Settings(BaseSettings):
     black_ice_conversion_rate: int = 10          # 10 black ice → 1 hardened brick
     black_ice_check_interval_seconds: int = 120  # run every 2 minutes
 
+    # How often (seconds) the bot runs RCON listplayers to update the
+    # online players table. Default 30s. Lower = more responsive /online
+    # and killfeed platform ID lookups, but more RCON calls per minute.
+    usersync_interval_seconds: int = 30
+
     # ── Prison ────────────────────────────────────────────────────────────────
     prison_enabled: bool = False
     prison_exit_coords: str = "0 0 0"
