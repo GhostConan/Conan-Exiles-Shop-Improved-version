@@ -41,7 +41,7 @@ RE_TIMESTAMP = re.compile(r"\[(\d{4}\.\d{2}\.\d{2}-\d{2}\.\d{2}\.\d{2}:\d+)\]")
 #   Character '<name>' said: <msg>
 # This pattern accepts both.
 RE_CHAT = re.compile(
-    r"Character\s+'?([^'\s(]+)'?\s*(?:\([^)]*\))?\s+said:\s*(.+)"
+    r"Character\s+(?P<char>.+?)\s*\((?:uid\s+\d+|[^)]*)\)[^)]*\s+said:\s*(?P<msg>.+)"
 )
 RE_BLACK_ICE_DROP = re.compile(
     r"(?P<char>.+?)\s+dropped\s+Black\s*Ice\s+(?:amount:|x)(?P<amount>\d+)",
@@ -261,8 +261,8 @@ async def _process_line(
 
     m = RE_CHAT.search(line)
     if m:
-        char_name = m.group(1)
-        message = m.group(2).strip()
+        char_name = m.group("char").strip()
+        message = m.group("msg").strip()
         await _handle_chat(pool, bot, srv, char_name, message)
         await _post_chat_to_log(bot, srv, char_name, message)
         return
