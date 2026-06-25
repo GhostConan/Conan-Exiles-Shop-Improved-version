@@ -129,7 +129,8 @@ async def main() -> None:
             args=[pool, srv], id=f"payroll_{sn}", misfire_grace_time=60,
         )
         scheduler.add_job(
-            sync_players, "interval", minutes=5,
+            sync_players, "interval",
+            seconds=settings.usersync_interval_seconds,
             args=[pool, srv], id=f"usersync_{sn}", misfire_grace_time=60,
         )
         scheduler.add_job(
