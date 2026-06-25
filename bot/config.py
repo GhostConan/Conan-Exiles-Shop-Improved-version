@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     # When true, kills where both players share the same clan/guild are
     # hidden. Prevents friendly fire and clan training kills from posting.
     killfeed_hide_friendly_fire: bool = True
+    # Live "who's online" board: edits a single embed in this channel.
+    # Set to 0 to disable. Pair with USERSYNC_INTERVAL_SECONDS for accuracy.
+    online_players_channel_id: int = 0
+    online_players_update_interval_seconds: int = 15
     items_for_sale_channel_id: int = 0
     server_buffs_channel_id: int = 0
     jail_channel_id: int = 0

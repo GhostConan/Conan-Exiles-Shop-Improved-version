@@ -102,6 +102,7 @@ async def main() -> None:
     from bot.tasks.raid_watcher import watch_raid
     from bot.tasks.shrine_watcher import watch_shrines
     from bot.tasks.kill_catchup import replay_missed_kills
+    from bot.tasks.online_players_watcher import watch_online_players
 
     # ── APScheduler ───────────────────────────────────────────────────────────
     scheduler = AsyncIOScheduler(timezone="UTC")
@@ -198,6 +199,12 @@ async def main() -> None:
                 watch_shrines, "interval",
                 seconds=settings.shrine_check_interval_seconds,
                 args=[pool, srv, bot], id=f"shrinewatch_{sn}", misfire_grace_time=30,
+            )
+        if settings.online_players_channel_id:
+            scheduler.add_job(
+                watch_online_players, "interval",
+                seconds=settings.online_players_update_interval_seconds,
+                args=[pool, srv, bot], id=f"onlineplayers_{sn}", misfire_grace_time=30,
             )
 
     logger.info("Scheduler has {} jobs total", len(scheduler.get_jobs()))
