@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     # World NPCs (Cimmerian/Stygian/Nordheimer faction camps, wildlife,
     # pets, mounts) are always suppressed regardless of this flag.
     killfeed_pvp_only: bool = True
+    # When true, kills where both players share the same clan/guild are
+    # hidden. Prevents friendly fire and clan training kills from posting.
+    killfeed_hide_friendly_fire: bool = True
     items_for_sale_channel_id: int = 0
     server_buffs_channel_id: int = 0
     jail_channel_id: int = 0
