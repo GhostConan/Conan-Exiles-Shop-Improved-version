@@ -50,6 +50,8 @@ class Settings(BaseSettings):
     # Set to 0 to disable. Pair with USERSYNC_INTERVAL_SECONDS for accuracy.
     online_players_channel_id: int = 0
     online_players_update_interval_seconds: int = 15
+    # Channel to post the coin balance leaderboard via /coinleaderboard.
+    coin_leaderboard_channel_id: int = 0
     items_for_sale_channel_id: int = 0
     server_buffs_channel_id: int = 0
     jail_channel_id: int = 0
