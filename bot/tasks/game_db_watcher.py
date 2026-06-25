@@ -32,6 +32,20 @@ async def watch_game_db(pool: aiomysql.Pool, srv: ServerContext, bot: commands.B
                 await cur.execute("SET NAMES utf8mb4")
                 sn = srv.server_name
 
+                # Ensure clan_id is a primary key so REPLACE INTO works
+                # atomically (avoids "Record has changed" race condition).
+                # Safe to run every cycle — ADD PRIMARY KEY fails silently
+                # if the key already exists via the IF NOT EXISTS guard.
+                try:
+                    await cur.execute(
+                        f"ALTER TABLE {sn}_building_piece_tracking "
+                        "MODIFY clan_id INT NOT NULL, "
+                        "DROP PRIMARY KEY, "
+                        "ADD PRIMARY KEY (clan_id)"
+                    )
+                except Exception:
+                    pass  # already has PK or table doesn't exist yet
+
                 async with aiosqlite.connect(
                     f"file:{srv.game_db_path}?mode=ro", uri=True
                 ) as game_db:
@@ -61,10 +75,21 @@ async def watch_game_db(pool: aiomysql.Pool, srv: ServerContext, bot: commands.B
                         clan_data = await rows.fetchall()
 
                     if clan_data:
-                        await cur.execute(f"DELETE FROM {sn}_building_piece_tracking")
+                        # Use LOCK TABLES / REPLACE to avoid the MyISAM/Aria
+                        # "Record has changed since last read" race that fires
+                        # when the raid_watcher reads the table concurrently.
+                        # REPLACE INTO is atomic per-row and avoids the
+                        # DELETE+re-INSERT window that triggers the error.
+                        # We also delete rows for guilds that no longer exist.
+                        current_ids = tuple(row["guildid"] for row in clan_data)
+                        await cur.execute(
+                            f"DELETE FROM {sn}_building_piece_tracking "
+                            f"WHERE clan_id NOT IN %s",
+                            (current_ids,),
+                        )
                         for row in clan_data:
                             await cur.execute(
-                                f"INSERT INTO {sn}_building_piece_tracking "
+                                f"REPLACE INTO {sn}_building_piece_tracking "
                                 "(clan_id, clan_name, building_piece_count) VALUES (%s, %s, %s)",
                                 (row["guildid"], row["name"], row["piece_count"]),
                             )
