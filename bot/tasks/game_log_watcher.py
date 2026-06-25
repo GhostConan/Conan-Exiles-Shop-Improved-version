@@ -411,16 +411,16 @@ async def _handle_kill(
                 f"file:{srv.game_db_path}?mode=ro", uri=True
             ) as game_db:
                 async with game_db.execute(
-                    "SELECT ch.guildhash FROM characters ch "
+                    "SELECT ch.guild FROM characters ch "
                     "JOIN account a ON a.id = ch.playerid "
-                    "WHERE a.user = ? AND ch.guildhash IS NOT NULL AND ch.guildhash <> 0 LIMIT 1",
+                    "WHERE a.user = ? AND ch.guild IS NOT NULL AND ch.guild <> 0 LIMIT 1",
                     (killer_platformid,),
                 ) as rows:
                     k_row = await rows.fetchone()
                 async with game_db.execute(
-                    "SELECT ch.guildhash FROM characters ch "
+                    "SELECT ch.guild FROM characters ch "
                     "JOIN account a ON a.id = ch.playerid "
-                    "WHERE a.user = ? AND ch.guildhash IS NOT NULL AND ch.guildhash <> 0 LIMIT 1",
+                    "WHERE a.user = ? AND ch.guild IS NOT NULL AND ch.guild <> 0 LIMIT 1",
                     (victim_platformid,),
                 ) as rows:
                     v_row = await rows.fetchone()
