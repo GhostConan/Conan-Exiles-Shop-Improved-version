@@ -388,6 +388,51 @@ async def _handle_kill(
     except Exception as exc:
         logger.warning("Kill DB record error [{}]: {}", sn, exc)
 
+    # ── Platform ID gate ────────────────────────────────────────────────
+    # NPCs have no platform/Steam ID. If either side resolved to an empty
+    # platform ID it's an NPC kill — skip the Discord post entirely.
+    # This replaces the name-cache heuristic and is authoritative: any
+    # NPC from any DLC (Exiled Lands, Siptah, future expansions) is
+    # automatically excluded because it can never have a platform ID.
+    if settings.killfeed_pvp_only:
+        if not killer_platformid or not victim_platformid:
+            logger.debug(
+                "Killfeed [{}]: skipping '{}' killed '{}' — missing platform ID "
+                "(killer_pid={!r}, victim_pid={!r})",
+                sn, killer, victim, killer_platformid, victim_platformid,
+            )
+            return
+
+    # ── Friendly fire gate ──────────────────────────────────────────────
+    # If both players are in the same clan, skip the Discord post.
+    if settings.killfeed_hide_friendly_fire and killer_platformid and victim_platformid:
+        try:
+            async with aiosqlite.connect(
+                f"file:{srv.game_db_path}?mode=ro", uri=True
+            ) as game_db:
+                async with game_db.execute(
+                    "SELECT ch.guildhash FROM characters ch "
+                    "JOIN account a ON a.id = ch.playerid "
+                    "WHERE a.user = ? AND ch.guildhash IS NOT NULL AND ch.guildhash <> 0 LIMIT 1",
+                    (killer_platformid,),
+                ) as rows:
+                    k_row = await rows.fetchone()
+                async with game_db.execute(
+                    "SELECT ch.guildhash FROM characters ch "
+                    "JOIN account a ON a.id = ch.playerid "
+                    "WHERE a.user = ? AND ch.guildhash IS NOT NULL AND ch.guildhash <> 0 LIMIT 1",
+                    (victim_platformid,),
+                ) as rows:
+                    v_row = await rows.fetchone()
+            if k_row and v_row and k_row[0] == v_row[0]:
+                logger.debug(
+                    "Killfeed [{}]: skipping '{}' killed '{}' — same clan (guild {})",
+                    sn, killer, victim, k_row[0],
+                )
+                return
+        except Exception as exc:
+            logger.debug("Friendly fire check failed [{}]: {}", sn, exc)
+
     if settings.killlog_channel_id:
         chan = bot.get_channel(settings.killlog_channel_id)
         if chan:
