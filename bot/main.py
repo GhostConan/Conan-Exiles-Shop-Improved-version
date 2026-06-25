@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import warnings
 from pathlib import Path
 
 import aiomysql
@@ -14,6 +15,11 @@ import discord
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from discord.ext import commands
 from loguru import logger
+
+# Suppress aiomysql "Table already exists" warnings from CREATE TABLE IF NOT
+# EXISTS. These are harmless — the table is already there from a previous run —
+# but they clutter the console on every bot startup.
+warnings.filterwarnings("ignore", category=Warning, module="aiomysql")
 
 from bot.config import settings, ServerContext
 from bot.db import init_pool
