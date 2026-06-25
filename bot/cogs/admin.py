@@ -362,11 +362,18 @@ class AdminCog(commands.Cog, name="Admin"):
         async with self.pool.acquire() as conn:
             async with conn.cursor() as cur:
                 await cur.execute("SET NAMES utf8mb4")
+                sn = settings.server_name
+                # Join currentusers to get the in-game name even if
+                # accounts.conanplayer hasn't been synced yet.
                 await cur.execute(
-                    "SELECT a.conanplayer, a.walletbalance, a.discordid "
-                    "FROM accounts a "
-                    "WHERE a.walletbalance > 0 "
-                    "ORDER BY a.walletbalance DESC"
+                    f"SELECT "
+                    f"  COALESCE(a.conanplayer, cu.player, CONCAT('<@', a.discordid, '>'), 'Unknown') AS display_name, "
+                    f"  a.walletbalance, "
+                    f"  a.discordid "
+                    f"FROM accounts a "
+                    f"LEFT JOIN {sn}_currentusers cu ON cu.platformid = a.conanplatformid "
+                    f"WHERE a.walletbalance > 0 "
+                    f"ORDER BY a.walletbalance DESC"
                 )
                 rows = await cur.fetchall()
 
@@ -382,8 +389,7 @@ class AdminCog(commands.Cog, name="Admin"):
             start = page_num * 25
             for idx, (name, balance, discord_id) in enumerate(page, start=start + 1):
                 medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(idx, f"`#{idx}`")
-                display = name or f"<@{discord_id}>" if discord_id else "Unknown"
-                lines.append(f"{medal} **{display}** — {balance:,} {settings.currency_name}")
+                lines.append(f"{medal} **{name}** — {balance:,} {settings.currency_name}")
 
             embed = discord.Embed(
                 title=f"💰 Coin Leaderboard — {settings.server_name}"
