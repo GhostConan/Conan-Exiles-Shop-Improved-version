@@ -342,5 +342,66 @@ class AdminCog(commands.Cog, name="Admin"):
             await interaction.followup.send(f"Failed to unblock `{ip_address}`: {exc}", ephemeral=True)
 
 
+    # ── /coinleaderboard ──────────────────────────────────────────────────────
+    @app_commands.command(
+        name="coinleaderboard",
+        description="[ADMIN] Post the coin balance leaderboard to the configured channel.",
+    )
+    @_admin_check()
+    async def coin_leaderboard(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+
+        target_chan_id = settings.coin_leaderboard_channel_id
+        chan = self.bot.get_channel(target_chan_id) if target_chan_id else None
+        if not chan:
+            await interaction.followup.send(
+                "❌ `COIN_LEADERBOARD_CHANNEL_ID` is not set or channel not found.", ephemeral=True
+            )
+            return
+
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SET NAMES utf8mb4")
+                await cur.execute(
+                    "SELECT a.conanplayer, a.walletbalance, a.discordid "
+                    "FROM accounts a "
+                    "WHERE a.walletbalance > 0 "
+                    "ORDER BY a.walletbalance DESC"
+                )
+                rows = await cur.fetchall()
+
+        if not rows:
+            await interaction.followup.send("No registered players with a balance.", ephemeral=True)
+            return
+
+        # Build paginated embeds (25 players per embed)
+        pages = [rows[i:i+25] for i in range(0, len(rows), 25)]
+        embeds = []
+        for page_num, page in enumerate(pages):
+            lines = []
+            start = page_num * 25
+            for idx, (name, balance, discord_id) in enumerate(page, start=start + 1):
+                medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(idx, f"`#{idx}`")
+                display = name or f"<@{discord_id}>" if discord_id else "Unknown"
+                lines.append(f"{medal} **{display}** — {balance:,} {settings.currency_name}")
+
+            embed = discord.Embed(
+                title=f"💰 Coin Leaderboard — {settings.server_name}"
+                      + (f" (page {page_num+1}/{len(pages)})" if len(pages) > 1 else ""),
+                description="\n".join(lines),
+                colour=discord.Colour.gold(),
+            )
+            embed.set_footer(text=f"{len(rows)} registered player{'s' if len(rows) != 1 else ''} with balance")
+            embeds.append(embed)
+
+        for embed in embeds:
+            await chan.send(embed=embed)
+
+        await interaction.followup.send(
+            f"✅ Posted leaderboard ({len(rows)} players) to {chan.mention}.", ephemeral=True
+        )
+        logger.info("Admin {} posted coin leaderboard ({} players)", interaction.user, len(rows))
+
+
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(AdminCog(bot))
