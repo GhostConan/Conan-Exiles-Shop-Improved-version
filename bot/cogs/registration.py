@@ -57,24 +57,21 @@ class RegistrationCog(commands.Cog, name="Registration"):
                     )
                     return
 
-                # Reuse existing pending code if present
+                # Always generate a fresh code. Delete any stale pending
+                # code first so the player gets a new one every time they
+                # run /register (avoids confusion if the old code was lost).
                 await cur.execute(
-                    "SELECT registrationcode FROM registration_codes "
+                    "DELETE FROM registration_codes "
                     "WHERE discordID = %s AND curstatus = FALSE",
                     (discord_id,),
                 )
-                pending = await cur.fetchone()
-
-                if pending:
-                    code = pending[0]
-                else:
-                    code = _gen_code()
-                    await cur.execute(
-                        "INSERT INTO registration_codes (discordID, registrationcode, curstatus) "
-                        "VALUES (%s, %s, FALSE)",
-                        (discord_id, code),
-                    )
-                    await conn.commit()
+                code = _gen_code()
+                await cur.execute(
+                    "INSERT INTO registration_codes (discordID, registrationcode, curstatus) "
+                    "VALUES (%s, %s, FALSE)",
+                    (discord_id, code),
+                )
+                await conn.commit()
 
         await interaction.followup.send(
             "📋 **Your registration code:**\n"
