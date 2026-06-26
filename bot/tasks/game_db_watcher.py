@@ -34,17 +34,27 @@ async def watch_game_db(pool: aiomysql.Pool, srv: ServerContext, bot: commands.B
 
                 # Ensure clan_id is a primary key so REPLACE INTO works
                 # atomically (avoids "Record has changed" race condition).
-                # Safe to run every cycle — ADD PRIMARY KEY fails silently
-                # if the key already exists via the IF NOT EXISTS guard.
+                # Only migrate if clan_id is not already the PK.
                 try:
                     await cur.execute(
-                        f"ALTER TABLE {sn}_building_piece_tracking "
-                        "MODIFY clan_id INT NOT NULL, "
-                        "DROP PRIMARY KEY, "
-                        "ADD PRIMARY KEY (clan_id)"
+                        "SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE "
+                        "WHERE TABLE_SCHEMA = DATABASE() "
+                        "AND TABLE_NAME = %s "
+                        "AND COLUMN_NAME = 'clan_id' "
+                        "AND CONSTRAINT_NAME = 'PRIMARY'",
+                        (f"{sn}_building_piece_tracking",),
                     )
+                    has_pk = (await cur.fetchone())[0] > 0
+                    if not has_pk:
+                        await cur.execute(
+                            f"ALTER TABLE {sn}_building_piece_tracking "
+                            "DROP PRIMARY KEY, "
+                            "MODIFY clan_id INT NOT NULL, "
+                            "ADD PRIMARY KEY (clan_id)"
+                        )
+                        await conn.commit()
                 except Exception:
-                    pass  # already has PK or table doesn't exist yet
+                    pass
 
                 async with aiosqlite.connect(
                     f"file:{srv.game_db_path}?mode=ro", uri=True

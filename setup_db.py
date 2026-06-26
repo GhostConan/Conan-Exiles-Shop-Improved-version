@@ -151,8 +151,7 @@ TABLES: list[str] = [
 
     f"""
     CREATE TABLE IF NOT EXISTS {SN}_building_piece_tracking (
-        ID                  INT  AUTO_INCREMENT PRIMARY KEY,
-        clan_id             INT,
+        clan_id             INT NOT NULL PRIMARY KEY,
         clan_name           VARCHAR(200),
         building_piece_count INT NOT NULL DEFAULT 0
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
