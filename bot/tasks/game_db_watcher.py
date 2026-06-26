@@ -72,7 +72,17 @@ async def watch_game_db(pool: aiomysql.Pool, srv: ServerContext, bot: commands.B
                         """,
                         (bp_filter,),
                     ) as rows:
-                        clan_data = await rows.fetchall()
+                        raw_data = await rows.fetchall()
+
+                    # Deduplicate by clan name: keep the guildid with the
+                    # most pieces. This handles stale duplicate guild rows
+                    # that Conan sometimes leaves after clan recreations.
+                    seen_names: dict[str, dict] = {}
+                    for row in raw_data:
+                        name = row["name"]
+                        if name not in seen_names or row["piece_count"] > seen_names[name]["piece_count"]:
+                            seen_names[name] = row
+                    clan_data = list(seen_names.values())
 
                     if clan_data:
                         # Use LOCK TABLES / REPLACE to avoid the MyISAM/Aria
