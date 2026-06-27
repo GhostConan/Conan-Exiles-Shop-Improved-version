@@ -181,21 +181,31 @@ async def _process_line(
         ):
             return
         # Skip non-PvP causes of death entirely when configured to do so.
-        # Falling, drowning, hunger, thirst, bleed, poison, suicide, etc.
-        # are not player-vs-player kills and clutter the feed. Combat,
-        # adminkill, and unknown/empty causes still flow through (the
-        # latter typically means "killed by arrow/explosion" which IS PvP
-        # — we resolve the attacker from game_events below).
+        # However, some causes (poison, bleed, acid, burn) CAN be player-
+        # inflicted via weapons. For those, try to resolve a real attacker
+        # from game_events first — if found, treat as a PvP kill. Only drop
+        # if no player attacker is found (i.e. truly environmental).
         if settings.killfeed_pvp_only:
-            non_pvp_causes = {
+            hard_non_pvp = {
                 "falling", "fall", "drowning", "drown", "hunger",
-                "thirst", "starvation", "bleed", "bleeding", "poison",
-                "burning", "burn", "fire", "frostbite", "freeze",
-                "corruption", "acid", "sandstorm", "purge",
+                "thirst", "starvation", "sandstorm", "purge",
+                "frostbite", "freeze", "corruption",
                 "suicide", "selfdestruct", "self_destruct",
             }
-            if cause.lower() in non_pvp_causes:
+            # These CAN be player-inflicted — try game_events before dropping
+            weapon_dot_causes = {
+                "bleed", "bleeding", "poison", "acid",
+                "burning", "burn", "fire",
+            }
+            cause_lower = cause.lower()
+            if cause_lower in hard_non_pvp:
                 return
+            if cause_lower in weapon_dot_causes and not killer:
+                resolved = await _resolve_attacker_from_gamedb(srv, victim)
+                if resolved:
+                    killer = resolved
+                else:
+                    return  # no player attacker found — environmental DoT
         # Skip logout / respawn artifacts. Conan emits the same
         # KillCharacterWithRagdoll line with empty KillerNameInput AND
         # CauseOfDeath=None when a player logs out, character is restored,
