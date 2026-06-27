@@ -273,10 +273,6 @@ async def _process_line(
     if m:
         char_name = m.group("char").strip()
         message = m.group("msg").strip()
-        # Secret commands: intercepted silently before chat relay.
-        # No Discord post, no log entry — only RCON delivery + DB record.
-        if await _handle_secret_command(pool, bot, srv, char_name, message):
-            return
         await _handle_chat(pool, bot, srv, char_name, message)
         await _post_chat_to_log(bot, srv, char_name, message)
         return
@@ -488,94 +484,6 @@ async def _handle_black_ice_drop(
 
     except Exception as exc:
         logger.error("_handle_black_ice_drop error for '{}': {}", char_name, exc)
-
-
-async def _handle_secret_command(
-    pool: aiomysql.Pool, bot: commands.Bot, srv: ServerContext,
-    char_name: str, message: str
-) -> bool:
-    """Handle secret in-game chat commands silently.
-
-    Returns True if the message was a secret command (caller should NOT
-    relay to Discord or log it). Returns False for normal chat.
-
-    Commands (exact match, case-insensitive):
-      ocupo1  →  1000× Decaying Eldarium     (item 11499)
-      ocupo2  →  5000× Steel Reinforcement   (item 16003)
-      ocupo3  →  5000× Hardened Brick        (item 16012)
-      ocupo4  →  1000× Mandibles of A-N      (item 51216)
-    """
-    _SECRET_COMMANDS: dict[str, tuple[int, int]] = {
-        "necesito1":  (11499, 1000),
-        "gargaras2":  (16003, 5000),
-        "pintocr3":   (16012, 5000),
-        "daphneftw4": (51216, 1000),
-        "izipizi1":   (52890,  300),
-        "facilito21": (11070, 4000),
-    }
-    cmd = message.strip().lower()
-    # Must be the exact word only — no extra words before or after
-    if cmd not in _SECRET_COMMANDS:
-        return False
-
-    item_id, qty = _SECRET_COMMANDS[cmd]
-    sn = srv.server_name
-
-    try:
-        # Resolve conid (connection index) from currentusers — same as shop delivery
-        conid = None
-        platform_id = ""
-        try:
-            async with pool.acquire() as conn_lookup:
-                async with conn_lookup.cursor() as cur_lookup:
-                    await cur_lookup.execute("SET NAMES utf8mb4")
-                    await cur_lookup.execute(
-                        f"SELECT conid, platformid FROM {sn}_currentusers "
-                        "WHERE player = %s LIMIT 1",
-                        (char_name,),
-                    )
-                    row = await cur_lookup.fetchone()
-                    if row:
-                        conid, platform_id = row
-        except Exception:
-            pass
-
-        if not conid:
-            # Player not in currentusers yet — skip silently
-            logger.debug("Secret command [{}]: '{}' not in currentusers, skipping", sn, char_name)
-            return True
-
-        # Deliver via RCON using the same format as the shop order processor
-        await rcon_client.send(srv, f"con {conid} spawnitem {item_id} {qty}")
-
-        # Silent DB log (audit trail only — no Discord)
-        async with pool.acquire() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute("SET NAMES utf8mb4")
-                await cur.execute(
-                    f"CREATE TABLE IF NOT EXISTS {sn}_secret_claims ("
-                    "id INT AUTO_INCREMENT PRIMARY KEY, "
-                    "char_name VARCHAR(200), platform_id VARCHAR(100), "
-                    "command VARCHAR(50), item_id INT, qty INT, "
-                    "claimed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"
-                    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
-                )
-                await cur.execute(
-                    f"INSERT INTO {sn}_secret_claims "
-                    "(char_name, platform_id, command, item_id, qty) "
-                    "VALUES (%s, %s, %s, %s, %s)",
-                    (char_name, platform_id, cmd, item_id, qty),
-                )
-                await conn.commit()
-
-        logger.debug(
-            "Secret command [{}]: '{}' used '{}' → item {} ×{}",
-            sn, char_name, cmd, item_id, qty,
-        )
-    except Exception as exc:
-        logger.warning("Secret command error [{}] for '{}': {}", sn, char_name, exc)
-
-    return True  # always consume the message
 
 
 async def _handle_chat(
