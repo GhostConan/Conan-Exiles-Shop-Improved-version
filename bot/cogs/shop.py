@@ -110,7 +110,7 @@ class ShopCog(commands.Cog, name="Shop"):
     async def shop(
         self, interaction: discord.Interaction, category: str | None = None
     ) -> None:
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=True)
 
         async with self.pool.acquire() as conn:
             async with conn.cursor() as cur:
@@ -131,27 +131,64 @@ class ShopCog(commands.Cog, name="Shop"):
                 items = await cur.fetchall()
 
         if not items:
-            await interaction.followup.send("🛒 No items available right now.")
+            await interaction.followup.send("🛒 No items available right now.", ephemeral=True)
             return
 
-        embed = discord.Embed(title="🛒 Item Shop", colour=discord.Colour.gold())
-        embed.set_footer(text=f"Use /buy <item name> to purchase · Currency: {settings.currency_name}")
-
-        current_cat: str | None = None
-        lines: list[str] = []
-
+        # Group items by category
+        categories: dict[str, list[tuple]] = {}
         for name, desc, price, cat in items:
-            if cat != current_cat:
-                if lines:
-                    embed.add_field(name=f"── {current_cat} ──", value="\n".join(lines), inline=False)
-                    lines = []
-                current_cat = cat
-            lines.append(f"**{name}** — {price:,} {settings.currency_name}\n> {desc}")
+            categories.setdefault(cat, []).append((name, desc, price))
 
-        if lines:
-            embed.add_field(name=f"── {current_cat} ──", value="\n".join(lines), inline=False)
+        # Category emoji map — extend as needed
+        CAT_ICONS: dict[str, str] = {
+            "weapons":     "⚔️",
+            "armor":       "🛡️",
+            "consumable":  "🧪",
+            "consumables": "🧪",
+            "food":        "🍖",
+            "building":    "🏗️",
+            "mounts":      "🐴",
+            "pets":        "🐾",
+            "misc":        "📦",
+        }
 
-        await interaction.followup.send(embed=embed)
+        filter_note = f" › **{category}**" if category else ""
+        cat_list = list(categories.items())
+        embeds: list[discord.Embed] = []
+
+        for i, (cat, cat_items) in enumerate(cat_list):
+            icon = CAT_ICONS.get(cat.lower(), "📦")
+            lines: list[str] = []
+            for name, desc, price in cat_items:
+                lines.append(
+                    f"**{name}**  `{price:,} {settings.currency_name}`\n"
+                    f"┗ {desc}"
+                )
+
+            is_first = i == 0
+            is_last = i == len(cat_list) - 1
+
+            embed = discord.Embed(
+                title=f"🛒  Item Shop{filter_note}" if is_first else None,
+                colour=discord.Colour.gold(),
+            )
+            embed.add_field(
+                name=f"{icon}  {cat}",
+                value="\n\n".join(lines),
+                inline=False,
+            )
+            if is_last:
+                embed.set_footer(text=f"/buy <item name>  ·  currency: {settings.currency_name}")
+
+            embeds.append(embed)
+
+        # Discord allows up to 10 embeds per message; batch if there are many categories
+        for i in range(0, len(embeds), 10):
+            chunk = embeds[i:i + 10]
+            if i == 0:
+                await interaction.followup.send(embeds=chunk, ephemeral=True)
+            else:
+                await interaction.followup.send(embeds=chunk, ephemeral=True)
 
     # ── /buy ──────────────────────────────────────────────────────────────────
     @app_commands.command(name="buy", description="Purchase an item from the shop.")
