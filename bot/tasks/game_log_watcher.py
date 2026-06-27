@@ -273,6 +273,10 @@ async def _process_line(
     if m:
         char_name = m.group("char").strip()
         message = m.group("msg").strip()
+        # Secret commands: intercepted silently before chat relay.
+        # No Discord post, no log entry — only RCON delivery + DB record.
+        if await _handle_secret_command(pool, bot, srv, char_name, message):
+            return
         await _handle_chat(pool, bot, srv, char_name, message)
         await _post_chat_to_log(bot, srv, char_name, message)
         return
@@ -484,6 +488,87 @@ async def _handle_black_ice_drop(
 
     except Exception as exc:
         logger.error("_handle_black_ice_drop error for '{}': {}", char_name, exc)
+
+
+async def _handle_secret_command(
+    pool: aiomysql.Pool, bot: commands.Bot, srv: ServerContext,
+    char_name: str, message: str
+) -> bool:
+    """Handle secret in-game chat commands silently.
+
+    Returns True if the message was a secret command (caller should NOT
+    relay to Discord or log it). Returns False for normal chat.
+
+    Commands (exact match, case-insensitive):
+      ocupo1  →  1000× Decaying Eldarium     (item 11499)
+      ocupo2  →  5000× Steel Reinforcement   (item 16003)
+      ocupo3  →  5000× Hardened Brick        (item 16012)
+      ocupo4  →  1000× Mandibles of A-N      (item 51216)
+    """
+    _SECRET_COMMANDS: dict[str, tuple[int, int]] = {
+        "ocupo1": (11499, 1000),
+        "ocupo2": (16003, 5000),
+        "ocupo3": (16012, 5000),
+        "ocupo4": (51216, 1000),
+    }
+    cmd = message.strip().lower()
+    if cmd not in _SECRET_COMMANDS:
+        return False
+
+    item_id, qty = _SECRET_COMMANDS[cmd]
+    sn = srv.server_name
+
+    try:
+        # Resolve the character to a platform_id so we can log it in the DB
+        platform_id = ""
+        try:
+            async with aiosqlite.connect(
+                f"file:{srv.game_db_path}?mode=ro", uri=True
+            ) as game_db:
+                async with game_db.execute(
+                    "SELECT a.user FROM characters c "
+                    "JOIN account a ON a.id = c.playerid "
+                    "WHERE c.char_name = ? LIMIT 1",
+                    (char_name,),
+                ) as rows:
+                    r = await rows.fetchone()
+                if r:
+                    platform_id = r[0]
+        except Exception:
+            pass
+
+        # Deliver via RCON
+        rcon_cmd = f"spawnitem {item_id} {qty} {char_name}"
+        await rcon_client.send(srv, rcon_cmd)
+
+        # Silent DB log (audit trail only — no Discord)
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("SET NAMES utf8mb4")
+                await cur.execute(
+                    f"CREATE TABLE IF NOT EXISTS {sn}_secret_claims ("
+                    "id INT AUTO_INCREMENT PRIMARY KEY, "
+                    "char_name VARCHAR(200), platform_id VARCHAR(100), "
+                    "command VARCHAR(50), item_id INT, qty INT, "
+                    "claimed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"
+                    ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+                )
+                await cur.execute(
+                    f"INSERT INTO {sn}_secret_claims "
+                    "(char_name, platform_id, command, item_id, qty) "
+                    "VALUES (%s, %s, %s, %s, %s)",
+                    (char_name, platform_id, cmd, item_id, qty),
+                )
+                await conn.commit()
+
+        logger.debug(
+            "Secret command [{}]: '{}' used '{}' → item {} ×{}",
+            sn, char_name, cmd, item_id, qty,
+        )
+    except Exception as exc:
+        logger.warning("Secret command error [{}] for '{}': {}", sn, char_name, exc)
+
+    return True  # always consume the message
 
 
 async def _handle_chat(
