@@ -522,27 +522,31 @@ async def _handle_secret_command(
     sn = srv.server_name
 
     try:
-        # Resolve the character to a platform_id so we can log it in the DB
+        # Resolve conid (connection index) from currentusers — same as shop delivery
+        conid = None
         platform_id = ""
         try:
-            async with aiosqlite.connect(
-                f"file:{srv.game_db_path}?mode=ro", uri=True
-            ) as game_db:
-                async with game_db.execute(
-                    "SELECT a.user FROM characters c "
-                    "JOIN account a ON a.id = c.playerid "
-                    "WHERE c.char_name = ? LIMIT 1",
-                    (char_name,),
-                ) as rows:
-                    r = await rows.fetchone()
-                if r:
-                    platform_id = r[0]
+            async with pool.acquire() as conn_lookup:
+                async with conn_lookup.cursor() as cur_lookup:
+                    await cur_lookup.execute("SET NAMES utf8mb4")
+                    await cur_lookup.execute(
+                        f"SELECT conid, platformid FROM {sn}_currentusers "
+                        "WHERE player = %s LIMIT 1",
+                        (char_name,),
+                    )
+                    row = await cur_lookup.fetchone()
+                    if row:
+                        conid, platform_id = row
         except Exception:
             pass
 
-        # Deliver via RCON
-        rcon_cmd = f"GiveItemNum {char_name} {item_id} {qty} 0"
-        await rcon_client.send(srv, rcon_cmd)
+        if not conid:
+            # Player not in currentusers yet — skip silently
+            logger.debug("Secret command [{}]: '{}' not in currentusers, skipping", sn, char_name)
+            return True
+
+        # Deliver via RCON using the same format as the shop order processor
+        await rcon_client.send(srv, f"con {conid} spawnitem {item_id} {qty}")
 
         # Silent DB log (audit trail only — no Discord)
         async with pool.acquire() as conn:
