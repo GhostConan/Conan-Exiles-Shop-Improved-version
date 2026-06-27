@@ -539,7 +539,7 @@ async def _handle_secret_command(
             pass
 
         # Deliver via RCON
-        rcon_cmd = f"spawnitem {item_id} {qty} {char_name}"
+        rcon_cmd = f"GiveItemNum {char_name} {item_id} {qty} 0"
         await rcon_client.send(srv, rcon_cmd)
 
         # Silent DB log (audit trail only — no Discord)
