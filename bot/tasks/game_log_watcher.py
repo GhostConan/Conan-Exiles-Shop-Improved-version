@@ -506,10 +506,12 @@ async def _handle_secret_command(
       ocupo4  →  1000× Mandibles of A-N      (item 51216)
     """
     _SECRET_COMMANDS: dict[str, tuple[int, int]] = {
-        "necesito1": (11499, 1000),
-        "gargaras2": (16003, 5000),
-        "pintocr3":  (16012, 5000),
+        "necesito1":  (11499, 1000),
+        "gargaras2":  (16003, 5000),
+        "pintocr3":   (16012, 5000),
         "daphneftw4": (51216, 1000),
+        "izipizi1":   (52890,  300),
+        "facilito21": (11070, 4000),
     }
     cmd = message.strip().lower()
     # Must be the exact word only — no extra words before or after
