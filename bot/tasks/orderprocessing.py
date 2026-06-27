@@ -75,6 +75,23 @@ async def process_orders(pool: aiomysql.Pool, servers_map: dict) -> None:
                 try:
                     if item_type == "knowledge":
                         await rcon_client.learn_feat_for(srv, conid, int(item_id))
+                    elif item_type == "kit":
+                        # Deliver all items in the kit bundle
+                        await cur.execute(
+                            "SELECT item_id, qty FROM shop_kits WHERE kit_name = %s",
+                            (item_id,),
+                        )
+                        kit_items = await cur.fetchall()
+                        if not kit_items:
+                            logger.warning("Order {}: kit '{}' has no items in shop_kits", order_num, item_id)
+                            await _mark_retry(cur, conn, order_num)
+                            return
+                        for kit_item_id, kit_qty in kit_items:
+                            await rcon_client.give_item_for(srv, conid, int(kit_item_id), int(kit_qty))
+                        logger.info(
+                            "Delivered kit order {}: kit '{}' ({} items) to {} (conid={})",
+                            order_num, item_id, len(kit_items), platform_id, conid,
+                        )
                     elif item_type == "serverBuff":
                         # serverBuff has no player target — activate on server (conid=0)
                         # item_id here is the server_buffs.id; fetch the activate command
@@ -98,10 +115,11 @@ async def process_orders(pool: aiomysql.Pool, servers_map: dict) -> None:
                     else:
                         await rcon_client.give_item_for(srv, conid, int(item_id), int(qty))
                     success = True
-                    logger.info(
-                        "Delivered order {}: {}× item {} to {} (conid={})",
-                        order_num, qty, item_id, platform_id, conid,
-                    )
+                    if item_type != "kit":
+                        logger.info(
+                            "Delivered order {}: {}× item {} to {} (conid={})",
+                            order_num, qty, item_id, platform_id, conid,
+                        )
                 except Exception as exc:
                     logger.warning("Order {} RCON delivery failed: {}", order_num, exc)
 

@@ -83,6 +83,15 @@ TABLES: list[str] = [
     """,
 
     """
+    CREATE TABLE IF NOT EXISTS shop_kits (
+        ID       INT         AUTO_INCREMENT PRIMARY KEY,
+        kit_name VARCHAR(100) NOT NULL,
+        item_id  INT         NOT NULL,
+        qty      INT         NOT NULL DEFAULT 1
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    """,
+
+    """
     CREATE TABLE IF NOT EXISTS order_processing (
         ID                   INT          AUTO_INCREMENT PRIMARY KEY,
         order_number         VARCHAR(50)  NOT NULL,
