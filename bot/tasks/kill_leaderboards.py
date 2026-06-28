@@ -129,64 +129,103 @@ async def _load_clan_maps(game_db_path: str) -> tuple[dict[str, str], dict[str, 
 
 
 async def _fetch_solo(cur, sn: str, since) -> list:
+    """Return list of (name, kills, deaths) sorted by kills desc."""
+    # --- kills per player ---
     if since:
         await cur.execute(
             f"SELECT killer_name, COUNT(*) AS kills "
             f"FROM {sn}_kill_log "
-            "WHERE kill_time >= %s AND killer_name <> '' "
-            "GROUP BY killer_name ORDER BY kills DESC LIMIT %s",
-            (since, TOP_N),
+            "WHERE kill_time >= %s AND killer_name <> '' AND LOWER(killer_name) <> 'unknown' "
+            "GROUP BY killer_name",
+            (since,),
         )
     else:
         await cur.execute(
             f"SELECT killer_name, COUNT(*) AS kills "
             f"FROM {sn}_kill_log "
-            "WHERE killer_name <> '' "
-            "GROUP BY killer_name ORDER BY kills DESC LIMIT %s",
-            (TOP_N,),
+            "WHERE killer_name <> '' AND LOWER(killer_name) <> 'unknown' "
+            "GROUP BY killer_name"
         )
-    return list(await cur.fetchall())
+    kill_rows = await cur.fetchall()
+    kills_map: dict[str, int] = {name: int(k) for name, k in kill_rows}
+
+    # --- deaths per player (how many times their name appears in victim_name) ---
+    if since:
+        await cur.execute(
+            f"SELECT victim_name, COUNT(*) AS deaths "
+            f"FROM {sn}_kill_log "
+            "WHERE kill_time >= %s AND victim_name <> '' AND LOWER(victim_name) <> 'unknown' "
+            "GROUP BY victim_name",
+            (since,),
+        )
+    else:
+        await cur.execute(
+            f"SELECT victim_name, COUNT(*) AS deaths "
+            f"FROM {sn}_kill_log "
+            "WHERE victim_name <> '' AND LOWER(victim_name) <> 'unknown' "
+            "GROUP BY victim_name"
+        )
+    death_rows = await cur.fetchall()
+    deaths_map: dict[str, int] = {name: int(d) for name, d in death_rows}
+
+    # Merge: only rank players who have at least one kill
+    merged = [
+        (name, kills, deaths_map.get(name, 0))
+        for name, kills in kills_map.items()
+    ]
+    merged.sort(key=lambda x: x[1], reverse=True)
+    return merged[:TOP_N]
 
 
 async def _fetch_clan(
     cur, sn: str, since, pid_to_clan: dict[str, str], name_to_clan: dict[str, str]
 ) -> list:
-    """Aggregate kills by clan using the live game.db clan map.
-
-    Tries killer_platformid first (authoritative), then falls back to
-    killer_name. The fallback is important because killer_platformid is
-    populated from {sn}_currentusers at kill-time, which is only synced
-    every 5 minutes — kills that occur before usersync has run for that
-    player will have an empty platformid.
+    """Aggregate kills and deaths by clan using the live game.db clan map.
+    Returns list of (clan_name, kills, deaths) sorted by kills desc.
     """
     if not pid_to_clan and not name_to_clan:
         return []
 
     if since:
         await cur.execute(
-            f"SELECT killer_name, killer_platformid, COUNT(*) AS kills "
+            f"SELECT killer_name, killer_platformid, victim_name, COUNT(*) AS kills "
             f"FROM {sn}_kill_log "
-            "WHERE kill_time >= %s AND killer_name <> '' "
-            "GROUP BY killer_name, killer_platformid",
+            "WHERE kill_time >= %s AND killer_name <> '' AND LOWER(killer_name) <> 'unknown' "
+            "GROUP BY killer_name, killer_platformid, victim_name",
             (since,),
         )
     else:
         await cur.execute(
-            f"SELECT killer_name, killer_platformid, COUNT(*) AS kills "
+            f"SELECT killer_name, killer_platformid, victim_name, COUNT(*) AS kills "
             f"FROM {sn}_kill_log "
-            "WHERE killer_name <> '' "
-            "GROUP BY killer_name, killer_platformid"
+            "WHERE killer_name <> '' AND LOWER(killer_name) <> 'unknown' "
+            "GROUP BY killer_name, killer_platformid, victim_name"
         )
     rows = await cur.fetchall()
 
-    clan_totals: dict[str, int] = {}
-    for name, pid, kills in rows:
-        clan = (pid_to_clan.get(pid) if pid else None) or name_to_clan.get(name)
-        if not clan:
-            continue
-        clan_totals[clan] = clan_totals.get(clan, 0) + int(kills)
+    clan_kills: dict[str, int] = {}
+    clan_deaths: dict[str, int] = {}
 
-    return sorted(clan_totals.items(), key=lambda x: x[1], reverse=True)[:TOP_N]
+    for name, pid, victim_name, count in rows:
+        count = int(count)
+        # Credit kills to the killer's clan
+        killer_clan = (pid_to_clan.get(pid) if pid else None) or name_to_clan.get(name)
+        if killer_clan:
+            clan_kills[killer_clan] = clan_kills.get(killer_clan, 0) + count
+
+        # Credit deaths to the victim's clan
+        if victim_name:
+            victim_clan = name_to_clan.get(victim_name)
+            if victim_clan:
+                clan_deaths[victim_clan] = clan_deaths.get(victim_clan, 0) + count
+
+    # Only rank clans that have at least one kill
+    merged = [
+        (clan, kills, clan_deaths.get(clan, 0))
+        for clan, kills in clan_kills.items()
+    ]
+    merged.sort(key=lambda x: x[1], reverse=True)
+    return merged[:TOP_N]
 
 
 _WINDOW_LABEL = {
@@ -199,41 +238,47 @@ _WINDOW_LABEL = {
 
 def _solo_embed(rows: list, window: str) -> discord.Embed:
     embed = discord.Embed(
-        title=f"Solo Kill Leaderboard — {_WINDOW_LABEL.get(window, window)}",
-        colour=discord.Colour.dark_red(),
+        title=f"⚔️  Solo Kill Leaderboard  •  {_WINDOW_LABEL.get(window, window)}",
+        colour=discord.Colour.blue(),
     )
     if rows:
-        medals = ["1st ", "2nd ", "3rd "]
-        body_lines = [f"{'Rank':<5} {'Player':<28} {'Kills':>5}", "-" * 42]
-        for i, (name, kills) in enumerate(rows):
-            rank = medals[i] if i < 3 else f"{i+1:>3}. "
-            # Avoid printf-style codes blowing up on player names with %/' chars.
-            safe_name = (name or "Unknown")[:28]
-            body_lines.append(f"{rank:<5} {safe_name:<28} {int(kills):>5}")
-        embed.description = "```\n" + "\n".join(body_lines) + "\n```"
+        medals = {0: "🥇", 1: "🥈", 2: "🥉"}
+        header = f"{'Rank':<6} {'Player':<24} {'K':>5} {'D':>5} {'K:D':>6}"
+        divider = "─" * len(header)
+        lines = [header, divider]
+        for i, (name, kills, deaths) in enumerate(rows):
+            rank = f"{medals[i]:<5}" if i in medals else f"{i+1:>3}.  "
+            safe_name = (name or "Unknown")[:24]
+            kd = f"{kills / deaths:.2f}" if deaths else f"{kills}.00"
+            lines.append(f"{rank} {safe_name:<24} {kills:>5} {deaths:>5} {kd:>6}")
+        embed.description = "```\n" + "\n".join(lines) + "\n```"
     else:
         embed.description = "_No kills recorded in this window yet._"
 
     embed.timestamp = now_utc()
-    if settings.timestamp_footer: append_host_time_footer(embed)
+    if settings.timestamp_footer:
+        append_host_time_footer(embed)
     if settings.map_url:
-        embed.add_field(name="Server Map", value=f"[View Map]({settings.map_url})", inline=False)
+        embed.add_field(name="🗺️ Server Map", value=f"[View Map]({settings.map_url})", inline=False)
     return embed
 
 
 def _clan_embed(rows: list, window: str) -> discord.Embed:
     embed = discord.Embed(
-        title=f"Clan Kill Leaderboard — {_WINDOW_LABEL.get(window, window)}",
-        colour=discord.Colour.dark_orange(),
+        title=f"🛡️  Clan Kill Leaderboard  •  {_WINDOW_LABEL.get(window, window)}",
+        colour=discord.Colour.green(),
     )
     if rows:
-        medals = ["1st ", "2nd ", "3rd "]
-        body_lines = [f"{'Rank':<5} {'Clan':<28} {'Kills':>5}", "-" * 42]
-        for i, (clan, kills) in enumerate(rows):
-            rank = medals[i] if i < 3 else f"{i+1:>3}. "
-            safe_clan = (clan or "Unknown")[:28]
-            body_lines.append(f"{rank:<5} {safe_clan:<28} {int(kills):>5}")
-        embed.description = "```\n" + "\n".join(body_lines) + "\n```"
+        medals = {0: "🥇", 1: "🥈", 2: "🥉"}
+        header = f"{'Rank':<6} {'Clan':<24} {'K':>5} {'D':>5} {'K:D':>6}"
+        divider = "─" * len(header)
+        lines = [header, divider]
+        for i, (clan, kills, deaths) in enumerate(rows):
+            rank = f"{medals[i]:<5}" if i in medals else f"{i+1:>3}.  "
+            safe_clan = (clan or "Unknown")[:24]
+            kd = f"{kills / deaths:.2f}" if deaths else f"{kills}.00"
+            lines.append(f"{rank} {safe_clan:<24} {kills:>5} {deaths:>5} {kd:>6}")
+        embed.description = "```\n" + "\n".join(lines) + "\n```"
     else:
         embed.description = (
             "_No clan kills recorded in this window yet._\n"
@@ -241,9 +286,10 @@ def _clan_embed(rows: list, window: str) -> discord.Embed:
         )
 
     embed.timestamp = now_utc()
-    if settings.timestamp_footer: append_host_time_footer(embed)
+    if settings.timestamp_footer:
+        append_host_time_footer(embed)
     if settings.map_url:
-        embed.add_field(name="Server Map", value=f"[View Map]({settings.map_url})", inline=False)
+        embed.add_field(name="🗺️ Server Map", value=f"[View Map]({settings.map_url})", inline=False)
     return embed
 
 

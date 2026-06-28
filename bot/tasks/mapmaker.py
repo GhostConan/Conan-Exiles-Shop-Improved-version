@@ -22,6 +22,7 @@ from datetime import datetime
 from typing import Optional
 
 import aiomysql
+import aiosqlite
 import discord
 from discord.ext import commands
 from loguru import logger
@@ -29,8 +30,11 @@ from loguru import logger
 from bot.utils.timeutil import now_utc, append_host_time_footer
 from bot.config import settings, ServerContext
 
-# Maximum clans to show per leaderboard
+# Maximum clans to show for inventory leaderboard
 TOP_N = 15
+
+# Threshold above which a clan is flagged with a red dot on the building leaderboard
+BUILDING_PIECE_THRESHOLD = 10_000
 
 # Pillow is optional — only used for the map image
 try:
@@ -54,17 +58,12 @@ async def post_leaderboards(pool: aiomysql.Pool, srv: ServerContext, bot: comman
                     await cur.execute(
                         f"SELECT clan_name, building_piece_count "
                         f"FROM {sn}_building_piece_tracking "
-                        "ORDER BY building_piece_count DESC LIMIT %s",
-                        (TOP_N,),
+                        "ORDER BY building_piece_count DESC",
                     )
                     rows = await cur.fetchall()
                     if rows:
-                        embed = _build_leaderboard_embed(
-                            title="🏰 Building Piece Leaderboard",
-                            rows=rows,
-                            col_label="Pieces",
-                            colour=discord.Colour.og_blurple(),
-                        )
+                        game_db_total = await _count_game_db_building_instances(srv)
+                        embed = _build_building_embed(rows, game_db_total)
                         chan = bot.get_channel(settings.building_tracking_channel_id)
                         if chan:
                             await _post_or_edit(chan, embed, pool, sn, "building_lb")
@@ -93,6 +92,51 @@ async def post_leaderboards(pool: aiomysql.Pool, srv: ServerContext, bot: comman
         logger.error("Mapmaker/leaderboard error: {}", exc, exc_info=True)
 
 
+async def _count_game_db_building_instances(srv: ServerContext) -> Optional[int]:
+    """Return the total row count from building_instances in game.db, or None on error."""
+    try:
+        async with aiosqlite.connect(srv.game_db_path) as db:
+            async with db.execute("SELECT COUNT(*) FROM building_instances") as cur:
+                row = await cur.fetchone()
+                return row[0] if row else 0
+    except Exception as exc:
+        logger.warning("Could not count building_instances from game.db: {}", exc)
+        return None
+
+
+def _build_building_embed(rows: list, game_db_total: Optional[int]) -> discord.Embed:
+    """Embed for the building piece leaderboard.
+
+    • 🟢 clan is under BUILDING_PIECE_THRESHOLD pieces
+    • 🔴 clan is at or over BUILDING_PIECE_THRESHOLD pieces
+    • No rank numbers — dots only.
+    • Bottom field shows total building pieces from game.db building_instances.
+    """
+    embed = discord.Embed(title="🏰 Building Piece Leaderboard", colour=discord.Colour.og_blurple())
+    embed.timestamp = now_utc()
+    if settings.timestamp_footer:
+        append_host_time_footer(embed)
+
+    lines = []
+    for name, count in rows:
+        dot = "🔴" if count >= BUILDING_PIECE_THRESHOLD else "🟢"
+        lines.append(f"{dot} **{name or 'Unknown'}** — {count:,} / {BUILDING_PIECE_THRESHOLD:,} Pieces")
+
+    embed.description = "\n".join(lines) or "No data yet."
+
+    if game_db_total is not None:
+        embed.add_field(
+            name="🏗️ Total Server Building Pieces",
+            value=f"{game_db_total:,} (all players including clanless)",
+            inline=False,
+        )
+
+    if settings.map_url:
+        embed.add_field(name="Server Map", value=f"[View Map]({settings.map_url})", inline=False)
+
+    return embed
+
+
 def _build_leaderboard_embed(
     title: str,
     rows: list,
@@ -102,7 +146,8 @@ def _build_leaderboard_embed(
     medals = ["🥇", "🥈", "🥉"]
     embed = discord.Embed(title=title, colour=colour)
     embed.timestamp = now_utc()
-    if settings.timestamp_footer: append_host_time_footer(embed)
+    if settings.timestamp_footer:
+        append_host_time_footer(embed)
     lines = []
     for i, (name, count) in enumerate(rows):
         prefix = medals[i] if i < 3 else f"`{i+1:>2}.`"

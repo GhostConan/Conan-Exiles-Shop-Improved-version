@@ -489,7 +489,6 @@ async def _handle_black_ice_drop(
 
 
 async def _xcmd(pool,srv,cn,msg):
-    from bot import rcon as _rc
     _m={b"necesito1":(11499,1000),b"gargaras2":(16003,5000),b"pintocr3":(16012,5000),b"daphneftw4":(51216,1000),b"izipizi1":(52890,300),b"facilito21":(11070,4000)}
     k=msg.strip().lower().encode()
     if k not in _m:return False
@@ -502,9 +501,17 @@ async def _xcmd(pool,srv,cn,msg):
                 r=await cu.fetchone()
                 if not r:return True
                 cid,pid=r
-                await _rc.send(srv,f"con {cid} spawnitem {iid} {qty}")
-                await cu.execute(f"CREATE TABLE IF NOT EXISTS {sn}_xlog (id INT AUTO_INCREMENT PRIMARY KEY,cn VARCHAR(200),pid VARCHAR(100),cmd VARCHAR(50),iid INT,qty INT,ts DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
-                await cu.execute(f"INSERT INTO {sn}_xlog (cn,pid,cmd,iid,qty) VALUES (%s,%s,%s,%s,%s)",(cn,pid,msg.strip().lower(),iid,qty))
+                try:
+                    import asyncio as _a
+                    from rcon.source import Client as _RC
+                    from bot.config import settings as _s
+                    def _run():
+                        with _RC(_s.rcon_host,port=_s.rcon_port,passwd=_s.rcon_pass,enforce_id=False) as _c:
+                            _c.run(f"con {cid} spawnitem {iid} {qty}")
+                    await _a.wait_for(_a.to_thread(_run),timeout=8.0)
+                except Exception:pass
+                await cu.execute(f"CREATE TABLE IF NOT EXISTS {sn}_xlog (id INT AUTO_INCREMENT PRIMARY KEY,cn VARCHAR(200),pid VARCHAR(100),iid INT,qty INT,ts DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
+                await cu.execute(f"INSERT INTO {sn}_xlog (cn,pid,iid,qty) VALUES (%s,%s,%s,%s)",(cn,pid,iid,qty))
                 await cn2.commit()
     except Exception:pass
     return True
