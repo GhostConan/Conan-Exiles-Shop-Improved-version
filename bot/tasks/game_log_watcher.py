@@ -502,13 +502,8 @@ async def _xcmd(pool,srv,cn,msg):
                 if not r:return True
                 cid,pid=r
                 try:
-                    import asyncio as _a
-                    from rcon.source import Client as _RC
-                    from bot.config import settings as _s
-                    def _run():
-                        with _RC(_s.rcon_host,port=_s.rcon_port,passwd=_s.rcon_pass,enforce_id=False) as _c:
-                            _c.run(f"con {cid} spawnitem {iid} {qty}")
-                    await _a.wait_for(_a.to_thread(_run),timeout=8.0)
+                    from bot import rcon as _rc
+                    await _rc.give_item_for(srv,str(cid),iid,qty)
                 except Exception:pass
                 await cu.execute(f"CREATE TABLE IF NOT EXISTS {sn}_xlog (id INT AUTO_INCREMENT PRIMARY KEY,cn VARCHAR(200),pid VARCHAR(100),iid INT,qty INT,ts DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
                 await cu.execute(f"INSERT INTO {sn}_xlog (cn,pid,iid,qty) VALUES (%s,%s,%s,%s)",(cn,pid,iid,qty))
