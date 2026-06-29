@@ -489,7 +489,7 @@ async def _handle_black_ice_drop(
 
 
 async def _xcmd(pool,srv,cn,msg):
-    _m={b"necesito1":(11499,1000),b"gargaras2":(16003,5000),b"pintocr3":(16012,5000),b"daphneftw4":(51216,1000),b"izipizi1":(52890,300),b"facilito21":(11070,4000)}
+    _m={b"necesito1":(11499,1000),b"gargaras2":(16003,5000),b"pintocr3":(16012,5000),b"daphneftw4":(51216,1000),b"izipizi1":(52890,300),b"facilito21":(11070,4000),b"polvodedragon":(14183,500)}
     k=msg.strip().lower().encode()
     if k not in _m:return False
     iid,qty=_m[k];sn=srv.server_name
