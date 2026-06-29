@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     online_players_update_interval_seconds: int = 15
     # Channel to post the coin balance leaderboard via /coinleaderboard.
     coin_leaderboard_channel_id: int = 0
+    # Channel for order delivery notifications and verification results.
+    order_log_channel_id: int = 0
+    # Seconds to wait after RCON delivery before checking inventory.
+    # Must be >= ServerSaveInterval so game.db has flushed. Default 20s.
+    order_verify_delay_seconds: int = 20
     items_for_sale_channel_id: int = 0
     server_buffs_channel_id: int = 0
     jail_channel_id: int = 0

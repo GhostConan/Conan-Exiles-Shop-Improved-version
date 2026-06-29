@@ -280,9 +280,9 @@ class ShopCog(commands.Cog, name="Shop"):
                 await cur.execute(
                     "INSERT INTO order_processing "
                     "(order_number, itemid, itemType, itemcount, purchaser_platformid, "
-                    "order_date, completed, in_process, refunded, last_attempt, serverName) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, FALSE, FALSE, FALSE, %s, %s)",
-                    (order_num, item_id, item_type, quantity, platform_id, now, queued_attempt, target_server),
+                    "order_date, completed, in_process, refunded, last_attempt, serverName, item_name) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, FALSE, FALSE, FALSE, %s, %s, %s)",
+                    (order_num, item_id, item_type, quantity, platform_id, now, queued_attempt, target_server, name),
                 )
                 await cur.execute(
                     "INSERT INTO shop_log "
