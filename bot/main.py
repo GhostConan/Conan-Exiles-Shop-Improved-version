@@ -116,7 +116,7 @@ async def main() -> None:
     # Global tasks (not per-server)
     scheduler.add_job(
         process_orders, "interval", seconds=5,
-        args=[pool, servers_map], id="orders", misfire_grace_time=10,
+        args=[pool, servers_map, bot], id="orders", misfire_grace_time=10,
     )
 
     # Firewall blocklist sync (global, runs only if enabled)

